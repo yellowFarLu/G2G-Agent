@@ -1,0 +1,17 @@
+# 构建产物
+target/
+
+# 运行时数据（H2 库、上传文件）
+data/
+
+# 环境变量（含密钥，严禁入库）
+.env
+
+# IDE
+.idea/
+*.iml
+.vscode/
+.DS_Store
+
+# 日志
+*.log

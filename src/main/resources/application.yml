@@ -1,0 +1,56 @@
+server:
+  port: 8080
+
+spring:
+  application:
+    name: wiki-agent
+  servlet:
+    multipart:
+      max-file-size: 50MB
+      max-request-size: 200MB
+  datasource:
+    url: jdbc:h2:file:./data/h2/kb;AUTO_SERVER=TRUE
+    driver-class-name: org.h2.Driver
+    username: sa
+    password: ""
+  jpa:
+    hibernate:
+      ddl-auto: update
+    open-in-view: false
+  ai:
+    dashscope:
+      api-key: ${DASHSCOPE_API_KEY:}
+      chat:
+        options:
+          model: ${WIKIAGENT_CHAT_MODEL:qwen-plus}
+      embedding:
+        options:
+          model: ${WIKIAGENT_EMBEDDING_MODEL:text-embedding-v4}
+          dimensions: 1024
+
+logging:
+  level:
+    io.milvus: WARN
+    com.wikiagent: INFO
+
+wikiagent:
+  milvus:
+    uri: ${MILVUS_URI:http://${MILVUS_HOST:localhost}:${MILVUS_PORT:19530}}
+    username: ${MILVUS_USERNAME:root}
+    password: ${MILVUS_PASSWORD:milvus}
+    database: default
+    collection: wikiagent_chunks
+    dimension: 1024
+    bm25-k1: 1.2
+    bm25-b: 0.75
+  retrieve:
+    sub-topk: 20
+    final-topk: 10
+    rrf-k: 60
+    parent-char-budget: 12000
+  ingest:
+    parent-chars: 1000
+    parent-overlap: 150
+    child-chars: 350
+    child-overlap: 60
+    embedding-batch: 10

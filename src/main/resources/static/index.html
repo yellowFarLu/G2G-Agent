@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>WikiAgent 企业知识库</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header>
+  <h1>WikiAgent 企业知识库</h1>
+  <div id="health" class="health"><span class="chip gray">健康检查中…</span></div>
+</header>
+
+<nav>
+  <button id="tab-chat" class="tab active" type="button">对话</button>
+  <button id="tab-docs" class="tab" type="button">知识库管理</button>
+</nav>
+
+<main>
+  <!-- 对话页 -->
+  <section id="page-chat" class="page active">
+    <div id="messages" class="messages">
+      <div id="empty-hint" class="empty-hint">向知识库提问，例如：“报销流程是什么？” 资料不足时助手会如实告知。</div>
+    </div>
+    <div class="composer">
+      <textarea id="question" rows="2" placeholder="输入问题，Enter 发送，Shift+Enter 换行"></textarea>
+      <button id="btn-send" type="button">发送</button>
+      <button id="btn-stop" type="button" class="hidden">停止</button>
+    </div>
+  </section>
+
+  <!-- 知识库管理页 -->
+  <section id="page-docs" class="page">
+    <div class="upload-card">
+      <input id="file-input" type="file" multiple
+             accept=".txt,.md,.markdown,.pdf,.docx,.xlsx">
+      <button id="btn-upload" type="button">上传并解析</button>
+      <span class="muted">支持 TXT / Markdown / PDF / Word(docx) / Excel(xlsx)，单文件 ≤ 50MB</span>
+    </div>
+    <table class="docs-table">
+      <thead>
+        <tr>
+          <th>文件名</th><th>类型</th><th>大小</th><th>状态</th>
+          <th>父块</th><th>子块</th><th>上传时间</th><th>操作</th>
+        </tr>
+      </thead>
+      <tbody id="docs-body"><tr><td colspan="8" class="muted">加载中…</td></tr></tbody>
+    </table>
+  </section>
+</main>
+
+<script src="app.js"></script>
+</body>
+</html>

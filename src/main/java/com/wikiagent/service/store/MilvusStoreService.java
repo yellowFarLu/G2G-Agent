@@ -1,0 +1,229 @@
+package com.wikiagent.service.store;
+
+import com.google.gson.Gson;
+import com.google.gson.JsonObject;
+import com.wikiagent.config.WikiAgentProperties;
+import com.wikiagent.entity.KbChildChunk;
+import io.milvus.common.clientenum.FunctionType;
+import io.milvus.v2.client.ConnectConfig;
+import io.milvus.v2.client.MilvusClientV2;
+import io.milvus.v2.common.DataType;
+import io.milvus.v2.common.IndexParam;
+import io.milvus.v2.service.collection.request.AddFieldReq;
+import io.milvus.v2.service.collection.request.CreateCollectionReq;
+import io.milvus.v2.service.collection.request.HasCollectionReq;
+import io.milvus.v2.service.collection.request.LoadCollectionReq;
+import io.milvus.v2.service.vector.request.AnnSearchReq;
+import io.milvus.v2.service.vector.request.DeleteReq;
+import io.milvus.v2.service.vector.request.HybridSearchReq;
+import io.milvus.v2.service.vector.request.InsertReq;
+import io.milvus.v2.service.vector.request.data.BaseVector;
+import io.milvus.v2.service.vector.request.data.EmbeddedText;
+import io.milvus.v2.service.vector.request.data.FloatVec;
+import io.milvus.v2.service.vector.request.ranker.RRFRanker;
+import io.milvus.v2.service.vector.response.SearchResp;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.stereotype.Service;
+
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Map;
+import java.util.concurrent.atomic.AtomicReference;
+
+/**
+ * Milvus V2 SDK 封装：
+ * - collection: dense(FloatVector) + sparse(BM25 Function 自动生成) 双向量 + 标量元数据
+ * - hybridSearch: 一次请求双路召回，服务端 RRFRanker 融合
+ * 连接失败不阻断应用启动，由 /api/health 反馈状态。
+ */
+@Service
+public class MilvusStoreService {
+
+    private static final Logger log = LoggerFactory.getLogger(MilvusStoreService.class);
+    private static final Gson gson = new Gson();
+
+    private final WikiAgentProperties props;
+    private final AtomicReference<MilvusClientV2> clientRef = new AtomicReference<>();
+    private volatile String lastError = "尚未连接";
+
+    public MilvusStoreService(WikiAgentProperties props) {
+        this.props = props;
+    }
+
+    public synchronized MilvusClientV2 client() {
+        MilvusClientV2 c = clientRef.get();
+        if (c != null) {
+            return c;
+        }
+        try {
+            WikiAgentProperties.Milvus mc = props.milvus();
+            ConnectConfig cfg = ConnectConfig.builder()
+                    .uri(mc.uri())
+                    .username(mc.username())
+                    .password(mc.password())
+                    .dbName(mc.database() == null ? "default" : mc.database())
+                    .build();
+            c = new MilvusClientV2(cfg);
+            c.getServerVersion(); // 触发一次真实 RPC，验证连通
+            clientRef.set(c);
+            lastError = null;
+            log.info("Milvus 连接成功: {}", mc.uri());
+            return c;
+        } catch (Exception e) {
+            lastError = e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();
+            log.warn("Milvus 连接失败: {}", lastError);
+            throw new IllegalStateException("Milvus 不可用: " + lastError, e);
+        }
+    }
+
+    public String serverVersion() {
+        return client().getServerVersion();
+    }
+
+    public String lastError() {
+        return lastError;
+    }
+
+    /**
+     * 确保 collection 存在（首次自动创建：双向量字段 + BM25 Function + 索引 + load）。
+     */
+    public synchronized void ensureCollection() {
+        MilvusClientV2 c = client();
+        String coll = props.milvus().collection();
+        Boolean exists = c.hasCollection(HasCollectionReq.builder().collectionName(coll).build());
+        if (Boolean.TRUE.equals(exists)) {
+            return;
+        }
+        int dim = props.milvus().dimension();
+
+        CreateCollectionReq.CollectionSchema schema = c.createSchema();
+        schema.addField(AddFieldReq.builder()
+                .fieldName("id").dataType(DataType.VarChar).maxLength(64).isPrimaryKey(true).build());
+        schema.addField(AddFieldReq.builder()
+                .fieldName("text").dataType(DataType.VarChar).maxLength(65535)
+                .enableAnalyzer(true).analyzerParams(Map.of("type", "chinese")).build());
+        schema.addField(AddFieldReq.builder()
+                .fieldName("sparse").dataType(DataType.SparseFloatVector).build());
+        schema.addField(AddFieldReq.builder()
+                .fieldName("dense").dataType(DataType.FloatVector).dimension(dim).build());
+        schema.addField(AddFieldReq.builder()
+                .fieldName("doc_id").dataType(DataType.VarChar).maxLength(64).build());
+        schema.addField(AddFieldReq.builder()
+                .fieldName("parent_id").dataType(DataType.VarChar).maxLength(64).build());
+        schema.addField(AddFieldReq.builder()
+                .fieldName("child_index").dataType(DataType.Int32).build());
+
+        schema.addFunction(CreateCollectionReq.Function.builder()
+                .functionType(FunctionType.BM25)
+                .name("text_bm25_emb")
+                .inputFieldNames(List.of("text"))
+                .outputFieldNames(List.of("sparse"))
+                .build());
+
+        List<IndexParam> indexes = List.of(
+                IndexParam.builder()
+                        .fieldName("sparse")
+                        .indexType(IndexParam.IndexType.SPARSE_INVERTED_INDEX)
+                        .metricType(IndexParam.MetricType.BM25)
+                        .extraParams(Map.of(
+                                "bm25_k1", props.milvus().bm25K1(),
+                                "bm25_b", props.milvus().bm25B(),
+                                "inverted_index_algo", "DAAT_MAXSCORE"))
+                        .build(),
+                IndexParam.builder()
+                        .fieldName("dense")
+                        .indexType(IndexParam.IndexType.HNSW)
+                        .metricType(IndexParam.MetricType.COSINE)
+                        .extraParams(Map.of("M", 16, "efConstruction", 200))
+                        .build());
+
+        c.createCollection(CreateCollectionReq.builder()
+                .collectionName(coll)
+                .collectionSchema(schema)
+                .indexParams(indexes)
+                .build());
+        c.loadCollection(LoadCollectionReq.builder().collectionName(coll).build());
+        log.info("Milvus collection 已创建: {} (dim={})", coll, dim);
+    }
+
+    /**
+     * 批量写入子块。sparse 字段由服务端 BM25 Function 自动生成，客户端不传。
+     */
+    public void insertChildren(List<KbChildChunk> children, List<float[]> vectors) {
+        if (children.size() != vectors.size()) {
+            throw new IllegalArgumentException("children/vectors size mismatch");
+        }
+        ensureCollection();
+        List<JsonObject> rows = new ArrayList<>(children.size());
+        for (int i = 0; i < children.size(); i++) {
+            KbChildChunk ch = children.get(i);
+            JsonObject row = new JsonObject();
+            row.addProperty("id", ch.getId());
+            row.addProperty("text", ch.getContent());
+            row.add("dense", gson.toJsonTree(vectors.get(i)));
+            row.addProperty("doc_id", ch.getDocId());
+            row.addProperty("parent_id", ch.getParentId());
+            row.addProperty("child_index", ch.getChildIndex());
+            rows.add(row);
+        }
+        client().insert(InsertReq.builder()
+                .collectionName(props.milvus().collection())
+                .data(rows)
+                .build());
+    }
+
+    public record Hit(String childId, double score, String docId, String parentId, int childIndex) {
+    }
+
+    /**
+     * 混合检索：dense(查询向量) + sparse(原始查询文本，服务端 BM25 向量化) → RRFRanker 融合。
+     */
+    public List<Hit> hybridSearch(float[] queryEmbedding, String rewrittenQuery,
+                                  int subTopk, int finalTopk, int rrfK) {
+        ensureCollection();
+        List<BaseVector> denseVecs = List.of(new FloatVec(queryEmbedding));
+        List<BaseVector> sparseVecs = List.of(new EmbeddedText(rewrittenQuery));
+
+        AnnSearchReq denseReq = AnnSearchReq.builder()
+                .vectorFieldName("dense")
+                .vectors(denseVecs)
+                .topK(subTopk)
+                .build();
+        AnnSearchReq sparseReq = AnnSearchReq.builder()
+                .vectorFieldName("sparse")
+                .vectors(sparseVecs)
+                .topK(subTopk)
+                .build();
+
+        HybridSearchReq req = HybridSearchReq.builder()
+                .collectionName(props.milvus().collection())
+                .searchRequests(List.of(denseReq, sparseReq))
+                .ranker(new RRFRanker(rrfK))
+                .limit(finalTopk)
+                .outFields(List.of("doc_id", "parent_id", "child_index"))
+                .build();
+
+        SearchResp resp = client().hybridSearch(req);
+        List<SearchResp.SearchResult> hits = resp.getSearchResults().get(0);
+        List<Hit> result = new ArrayList<>(hits.size());
+        for (SearchResp.SearchResult hit : hits) {
+            Map<String, Object> entity = hit.getEntity();
+            result.add(new Hit(
+                    String.valueOf(hit.getId()),
+                    hit.getScore() == null ? 0 : hit.getScore(),
+                    String.valueOf(entity.getOrDefault("doc_id", "")),
+                    String.valueOf(entity.getOrDefault("parent_id", "")),
+                    entity.get("child_index") instanceof Number n ? n.intValue() : 0));
+        }
+        return result;
+    }
+
+    public void deleteByDocId(String docId) {
+        ensureCollection();
+        client().delete(DeleteReq.builder()
+                .collectionName(props.milvus().collection())
+                .filter("doc_id == \"" + docId.replace("\"", "") + "\"")
+                .build());
+    }
+}
