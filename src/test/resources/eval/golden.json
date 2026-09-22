@@ -1,0 +1,62 @@
+[
+  {
+    "question": "什么是差旅报销标准？",
+    "expectedIntent": "knowledge_qa",
+    "expectedModel": "simple",
+    "groundTruth": "差旅,报销,标准,交通,住宿"
+  },
+  {
+    "question": "如何申请出差审批？",
+    "expectedIntent": "knowledge_qa",
+    "expectedModel": "simple",
+    "groundTruth": "出差,审批,申请,流程"
+  },
+  {
+    "question": "公司请假制度是什么？",
+    "expectedIntent": "knowledge_qa",
+    "expectedModel": "simple",
+    "groundTruth": "请假,制度,年假,事假"
+  },
+  {
+    "question": "报销时限是多少天？",
+    "expectedIntent": "knowledge_qa",
+    "expectedModel": "simple",
+    "groundTruth": "报销,时限,天,30"
+  },
+  {
+    "question": "差旅补贴标准是什么？",
+    "expectedIntent": "knowledge_qa",
+    "expectedModel": "simple",
+    "groundTruth": "差旅,补贴,标准,餐补"
+  },
+  {
+    "question": "帮我写一个 Spring Boot 启动类",
+    "expectedIntent": "ai_coding",
+    "expectedModel": "complex",
+    "groundTruth": "SpringBoot,启动类,main,Application"
+  },
+  {
+    "question": "如何用 Java 实现一个单例模式？",
+    "expectedIntent": "ai_coding",
+    "expectedModel": "complex",
+    "groundTruth": "单例,模式,Java,private,static"
+  },
+  {
+    "question": "新客户接入流程是什么？",
+    "expectedIntent": "customer_intake",
+    "expectedModel": "complex",
+    "groundTruth": "客户,接入,流程,签约"
+  },
+  {
+    "question": "如何配置订单自动取消规则？",
+    "expectedIntent": "business_rule_config",
+    "expectedModel": "complex",
+    "groundTruth": "订单,取消,规则,配置,自动"
+  },
+  {
+    "question": "查询订单 O123456 的状态",
+    "expectedIntent": "order_query",
+    "expectedModel": "simple",
+    "groundTruth": "订单,查询,状态,O123456"
+  }
+]

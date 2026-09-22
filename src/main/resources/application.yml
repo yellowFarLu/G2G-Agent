@@ -8,15 +8,41 @@ spring:
     multipart:
       max-file-size: 50MB
       max-request-size: 200MB
+
+  # ============================================================
+  # v1-v5 §11.2 数据源：开发期 H2 MySQL 兼容模式（生产切 MySQL）
+  # 实施校正：原方案文档 §11.2 直接用 MySQL；为保持"变更前可启动"
+  # 约束，开发期保留 H2 文件库 + MODE=MySQL，生产用 MYSQL_HOST 环境变量切换
+  # ============================================================
   datasource:
-    url: jdbc:h2:file:./data/h2/kb;AUTO_SERVER=TRUE
-    driver-class-name: org.h2.Driver
-    username: sa
-    password: ""
+    url: ${MYSQL_URL:jdbc:h2:file:./data/h2/kb;AUTO_SERVER=TRUE;MODE=MySQL}
+    driver-class-name: ${MYSQL_DRIVER:org.h2.Driver}
+    username: ${MYSQL_USER:sa}
+    password: ${MYSQL_PASSWORD:}
   jpa:
     hibernate:
-      ddl-auto: update
+      ddl-auto: ${JPA_DDL:update}   # 开发 update；生产 validate
     open-in-view: false
+    properties:
+      hibernate:
+        dialect: ${HIBERNATE_DIALECT:org.hibernate.dialect.H2Dialect}
+
+  # Flyway 数据库迁移（V1-V8 SQL）
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+    baseline-on-migrate: true       # 已有库基线化，不阻断启动
+    validate-on-migrate: false       # H2 兼容模式部分语法差异，放宽校验
+    create-schemas: true             # 自动创建 schema（H2 public / MySQL wikiagent）
+
+  # Redis（§3 短期记忆 + §6 历史事件 SETNX + §22 分布式锁）
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+      password: ${REDIS_PASSWORD:}
+
+  # Spring AI DashScope
   ai:
     dashscope:
       api-key: ${DASHSCOPE_API_KEY:}
@@ -28,11 +54,33 @@ spring:
           model: ${WIKIAGENT_EMBEDDING_MODEL:text-embedding-v4}
           dimensions: 1024
 
+  # v4 §16 集中式 Session 兜底（通过 wikiagent.session.redis-enabled 条件开启）
+  session:
+    store-type: ${SESSION_STORE:none}   # 默认 none；生产 redis
+    redis:
+      namespace: wikiagent:session
+      flush-mode: on_save
+
 logging:
   level:
     io.milvus: WARN
     com.wikiagent: INFO
 
+# ============================================================
+# Actuator + Prometheus（§8 全链路可观测）
+# ============================================================
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,prometheus
+  metrics:
+    tags:
+      application: wiki-agent
+
+# ============================================================
+# WikiAgent 业务配置
+# ============================================================
 wikiagent:
   milvus:
     uri: ${MILVUS_URI:http://${MILVUS_HOST:localhost}:${MILVUS_PORT:19530}}
@@ -48,6 +96,125 @@ wikiagent:
     final-topk: 10
     rrf-k: 60
     parent-char-budget: 12000
+  agent:
+    enabled: true
+    max-rounds: 2
+    max-queries-per-round: 3
+
+  # ============================================================
+  # 知识库未命中兜底（实施校正 2026-09-22）
+  # 检索结果为空时：优先联网搜索（DashScope enable_search，已实测），
+  # 其次模型自身通用知识；回答中强制声明来源属性，不伪装成知识库内容。
+  # 两者都关闭则沿用"知识库未命中"拒答。
+  # ============================================================
+  fallback:
+    web-search-enabled: ${WIKIAGENT_FALLBACK_WEB_SEARCH_ENABLED:true}
+    own-knowledge-enabled: ${WIKIAGENT_FALLBACK_OWN_KNOWLEDGE_ENABLED:true}
+
+  # v1-v2 §3-§6 记忆层
+  memory:
+    short-term-max-turns: 20          # 短期记忆最多 20 轮
+    short-term-ttl-hours: 24           # Redis TTL 24h
+    handover-dir: ./data/handover      # 交接清单存储目录
+    python-script: scripts/extract_field_index.py
+
+  # v1-v2 §7 LLM 路由
+  routing:
+    # 实施校正 2026-09-22：模型名经 DashScope API 实测（qwen-3.8-* 不存在，会报 Model not exist）
+    intent-model: ${WIKIAGENT_INTENT_MODEL:qwen-flash}     # 意图识别模型（快/省）
+    simple-model: ${WIKIAGENT_SIMPLE_MODEL:qwen-plus}      # 简单任务模型
+    complex-model: ${WIKIAGENT_COMPLEX_MODEL:qwen-max}     # 复杂任务模型
+    mock-intents-enabled: ${WIKIAGENT_MOCK_INTENTS_ENABLED:true}  # 关闭后 4 个 Mock 意图降级为 knowledge_qa
+
+  # v3 §6.5 身份权限
+  identity:
+    default-identity: business        # 未配置身份用户的默认值（最严，避免越权）
+    admin-token: ${WIKIAGENT_ADMIN_TOKEN:}   # 开发期 X-Admin-Token 头部校验
+
+  # v1-v2 §10 安全护栏
+  security:
+    input-guardrail-enabled: true
+    spotlighting-enabled: true
+    rule-of-two-enabled: true
+
+  # v4 §6.6 知识冲突检测
+  conflict:
+    threshold: ${WIKIAGENT_CONFLICT_THRESHOLD:0.8}   # 相似度 > 0.8 视为冲突
+    scan-cron: "0 30 2 * * ?"                          # 每日 02:30 扫已入库 chunk
+
+  # v4 §6.6.2 知识指标看板
+  metrics:
+    tau-time-days: 180                                 # 时间衰减常数
+    tau-frequency-days: 30                             # 使用频率衰减常数
+    stale-threshold: 0.3                               # stale_score < 0.3 视为过期知识
+    aggregation-cron: "0 0 2 * * ?"                    # 每日 02:00 聚合作业
+
+  # v5 §19 Agent 安全网关
+  gateway:
+    input:
+      detectors: [keyword_blacklist, llm_judge]
+      llm-judge:
+        model: ${WIKIAGENT_INTENT_MODEL:qwen-flash}
+        block-threshold: 0.7
+    output:
+      detectors: [moderation, system_prompt_leak, presidio_pii]
+      moderation:
+        categories: [涉政, 涉黄, 暴恐, 违法违规]
+        openai-moderation-enabled: false
+      presidio:
+        sidecar-url: ${PRESIDIO_URL:http://presidio-analyzer:5050}
+        operators: [mask]
+
+  # v4 §16 接入层会话亲和
+  session:
+    redis-enabled: ${WIKIAGENT_SESSION_REDIS:false}   # 默认 false；生产 true
+
+  # ============================================================
+  # 实施校正：Redis 总开关（开发默认 false，无需 Redis 即可启动）
+  # false 时 ConditionalInfraEnvironmentPostProcessor 排除 Redisson/Redis
+  #   自动装配，短期记忆/情景记忆/分布式锁切换进程内降级实现；
+  #   docker-compose / 生产环境必须置 true（§3/§6/§22 硬约束）。
+  # ============================================================
+  redis:
+    enabled: ${REDIS_ENABLED:false}
+
+  # v6 §20 Plan-Execute-Reflect-Optimize
+  pero:
+    enabled: ${WIKIAGENT_PERO_ENABLED:true}
+    react:
+      max-iterations: 8
+      tool-whitelist-by-step-type:
+        search_kb: [search_knowledge_base]
+        search_history: [search_history]
+        update_profile: [update_user_profile]
+        tool: [search_knowledge_base, search_history, update_user_profile, read_handover, list_abandoned_paths]
+        generate: []
+    reflect:
+      model: ${WIKIAGENT_COMPLEX_MODEL:qwen-max}
+      episodic-memory-ttl-days: 30
+    optimize:
+      enabled: true
+
+  # v6 §21 Multi-Agent 架构
+  multi-agent:
+    enabled: ${WIKIAGENT_MULTI_AGENT_ENABLED:true}
+    framework: spring-ai-alibaba-agent-framework
+    supervisor-factory: lazy
+    intent-agents: [knowledge_qa, ai_coding, customer_intake, business_rule_config, order_query]
+    routing-field: identity
+
+  # v6 §22 多 Agent 并发控制
+  concurrency:
+    lock:
+      provider: redisson
+      default-ttl-seconds: 5
+      todo:
+        lock-mode: flock
+      milvus:
+        dedup-window-minutes: 5
+    state-reducer:
+      default: overwrite
+      list-keys: [messages, episodic_memory]
   ingest:
     parent-chars: 1000
     parent-overlap: 150

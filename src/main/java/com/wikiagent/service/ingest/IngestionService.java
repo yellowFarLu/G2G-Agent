@@ -1,5 +1,7 @@
 package com.wikiagent.service.ingest;
 
+import com.wikiagent.application.knowledge.KnowledgeTagContext;
+import com.wikiagent.application.knowledge.KnowledgeTaggingService;
 import com.wikiagent.config.WikiAgentProperties;
 import com.wikiagent.entity.KbChildChunk;
 import com.wikiagent.entity.KbDocument;
@@ -37,10 +39,12 @@ public class IngestionService {
     private final KbChildChunkRepo childRepo;
     private final MilvusStoreService milvus;
     private final EmbeddingModel embeddingModel;
+    private final KnowledgeTaggingService taggingService;
 
     public IngestionService(WikiAgentProperties props, DocumentParser parser, TextCleaner cleaner,
                             KbDocumentRepo docRepo, KbParentChunkRepo parentRepo, KbChildChunkRepo childRepo,
-                            MilvusStoreService milvus, EmbeddingModel embeddingModel) {
+                            MilvusStoreService milvus, EmbeddingModel embeddingModel,
+                            KnowledgeTaggingService taggingService) {
         this.props = props;
         this.parser = parser;
         this.cleaner = cleaner;
@@ -49,10 +53,22 @@ public class IngestionService {
         this.childRepo = childRepo;
         this.milvus = milvus;
         this.embeddingModel = embeddingModel;
+        this.taggingService = taggingService;
     }
 
+    /** 兼容入口：使用保守默认标签（v4 §6.6.1）。 */
     @Async("ingestExecutor")
     public void ingest(String docId, String filename, byte[] bytes) {
+        ingest(docId, filename, bytes, KnowledgeTagContext.defaultFor(filename));
+    }
+
+    /**
+     * 入库流水线（异步）。
+     *
+     * @param tagContext v4 知识打标上下文（9×6 领域标签 + 创建者元数据）
+     */
+    @Async("ingestExecutor")
+    public void ingest(String docId, String filename, byte[] bytes, KnowledgeTagContext tagContext) {
         KbDocument doc = docRepo.findById(docId).orElse(null);
         if (doc == null) {
             return;
@@ -94,6 +110,13 @@ public class IngestionService {
             childRepo.saveAll(childEntities);
             doc.setParentCount(parentEntities.size());
             doc.setChildCount(childEntities.size());
+
+            // v4 §6.6.1 知识打标（失败不阻断入库主流程，仅告警）
+            try {
+                taggingService.tagDocument(docId, childEntities, tagContext);
+            } catch (Exception tagEx) {
+                log.warn("知识元数据打标失败 docId={}: {}", docId, tagEx.getMessage());
+            }
 
             // 4. 子块向量化（DashScope 单次批量上限 10）
             doc.setStatus(KbDocument.EMBEDDING);

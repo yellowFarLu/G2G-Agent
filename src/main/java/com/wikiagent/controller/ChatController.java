@@ -8,7 +8,12 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
-/** 对话接口：POST /api/chat，SSE 流式返回。 */
+/**
+ * 对话接口：POST /api/chat，SSE 流式返回。
+ * <p>
+ * v6 §21 集成后支持 Multi-Agent 路由：请求体可选 {@code domain} / {@code subDomain} / {@code identity} 字段，
+ * 缺省 null 时走 §2 单 Agent RAG 管道。
+ */
 @RestController
 public class ChatController {
 
@@ -27,7 +32,7 @@ public class ChatController {
             throw new IllegalArgumentException("问题过长（最多 2000 字符）");
         }
         SseEmitter emitter = new SseEmitter(0L); // 不超时，由服务端显式完成
-        chatService.chat(request.question().strip(), emitter);
+        chatService.chat(request, emitter);
         return emitter;
     }
 }

@@ -3,31 +3,68 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>WikiAgent 企业知识库</title>
-  <link rel="stylesheet" href="style.css">
+  <title>G2G Agent</title>
+  <link rel="stylesheet" href="style.css?v=g2g-sess-20260922">
 </head>
 <body>
 <header>
-  <h1>WikiAgent 企业知识库</h1>
+  <h1>G2G Agent</h1>
   <div id="health" class="health"><span class="chip gray">健康检查中…</span></div>
 </header>
 
 <nav>
   <button id="tab-chat" class="tab active" type="button">对话</button>
   <button id="tab-docs" class="tab" type="button">知识库管理</button>
+  <button id="tab-govern" class="tab" type="button">知识治理</button>
+  <button id="tab-observe" class="tab" type="button">可观测</button>
 </nav>
 
 <main>
   <!-- 对话页 -->
   <section id="page-chat" class="page active">
+    <div class="chat-layout">
+      <aside id="session-sidebar" class="session-sidebar">
+        <div class="sidebar-header">
+          <h3>历史会话</h3>
+          <button id="btn-close-sidebar" type="button" class="mini">✕</button>
+        </div>
+        <div id="session-list" class="session-list"><div class="muted">加载中…</div></div>
+      </aside>
+      <div class="chat-main">
     <div id="messages" class="messages">
       <div id="empty-hint" class="empty-hint">向知识库提问，例如：“报销流程是什么？” 资料不足时助手会如实告知。</div>
+    </div>
+    <div class="session-bar">
+      <button id="btn-toggle-sidebar" type="button" class="mini">☰ 历史会话</button>
+      当前会话 ID：<code id="current-session" title="复制">—</code>
+      <button id="btn-copy-session" type="button" class="mini">复制</button>
+      <button id="btn-new-session" type="button" class="mini">新会话</button>
+      <span class="muted">同一会话内多轮提问共享上下文；可凭此 ID 在「可观测」页查询执行链路</span>
+    </div>
+    <div class="route-bar">
+      <label>领域
+        <select id="chat-domain">
+          <option value="">（不指定，走默认链路）</option>
+        </select>
+      </label>
+      <label>子领域
+        <select id="chat-subdomain" disabled>
+          <option value="">（先选领域）</option>
+        </select>
+      </label>
+      <label>身份
+        <select id="chat-identity">
+          <option value="">（匿名）</option>
+        </select>
+      </label>
     </div>
     <div class="composer">
       <textarea id="question" rows="2" placeholder="输入问题，Enter 发送，Shift+Enter 换行"></textarea>
       <button id="btn-send" type="button">发送</button>
       <button id="btn-stop" type="button" class="hidden">停止</button>
     </div>
+      </div><!-- chat-main -->
+    </div><!-- chat-layout -->
   </section>
 
   <!-- 知识库管理页 -->
@@ -37,6 +74,12 @@
              accept=".txt,.md,.markdown,.pdf,.docx,.xlsx">
       <button id="btn-upload" type="button">上传并解析</button>
       <span class="muted">支持 TXT / Markdown / PDF / Word(docx) / Excel(xlsx)，单文件 ≤ 50MB</span>
+      <div class="tag-bar">
+        <label>领域 <select id="upload-domain"></select></label>
+        <label>子领域 <select id="upload-subdomain"></select></label>
+        <label>上传人 <input id="upload-user" type="text" placeholder="工号/姓名（可选）"></label>
+        <label>上传身份 <select id="upload-identity"></select></label>
+      </div>
     </div>
     <table class="docs-table">
       <thead>
@@ -48,8 +91,101 @@
       <tbody id="docs-body"><tr><td colspan="8" class="muted">加载中…</td></tr></tbody>
     </table>
   </section>
+
+  <!-- 知识治理页 -->
+  <section id="page-govern" class="page">
+    <div class="subnav">
+      <button id="subtab-metrics" class="subtab active" type="button">知识看板</button>
+      <button id="subtab-conflicts" class="subtab" type="button">冲突审核</button>
+    </div>
+
+    <!-- 知识看板 -->
+    <div id="govern-metrics" class="subpage active">
+      <div class="toolbar">
+        <button id="btn-aggregate" type="button">立即聚合</button>
+        <span class="muted">每日 02:00 自动聚合（时间衰减 τ=180 天 + 30 天使用频率）</span>
+      </div>
+      <div id="kpi-row" class="kpi-row"></div>
+      <h3>疑似过期知识（stale_score &lt; 0.3）</h3>
+      <table class="data-table">
+        <thead><tr><th>chunkId</th><th>docId</th><th>领域</th><th>子领域</th><th>创建人</th><th>创建时间</th><th>近30天检索</th><th>stale_score</th></tr></thead>
+        <tbody id="stale-body"><tr><td colspan="8" class="muted">点击“立即聚合”查看</td></tr></tbody>
+      </table>
+    </div>
+
+    <!-- 冲突审核（代码冲突合并式） -->
+    <div id="govern-conflicts" class="subpage">
+      <div class="toolbar">
+        <label>状态
+          <select id="conflict-status">
+            <option value="DETECTED">待处理</option>
+            <option value="RESOLVED">已解决</option>
+            <option value="IGNORED">已忽略</option>
+          </select>
+        </label>
+        <button id="btn-conflict-refresh" type="button">刷新</button>
+        <button id="btn-conflict-scan" type="button">立即扫描</button>
+      </div>
+      <div class="conflict-layout">
+        <div class="conflict-list">
+          <table class="data-table">
+            <thead><tr><th>ID</th><th>领域</th><th>相似度</th><th>状态</th><th>检出时间</th></tr></thead>
+            <tbody id="conflict-body"><tr><td colspan="5" class="muted">加载中…</td></tr></tbody>
+          </table>
+        </div>
+        <div class="conflict-detail" id="conflict-detail">
+          <div class="muted placeholder">从左侧选择一条冲突查看双方内容对比</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 可观测页（v5 统一可观测 4 tab） -->
+  <section id="page-observe" class="page">
+    <div class="subnav">
+      <button id="obs-tab-trace" class="subtab active" type="button">执行路径</button>
+      <button id="obs-tab-metrics" class="subtab" type="button">业务指标</button>
+      <button id="obs-tab-knowledge" class="subtab" type="button">知识明细</button>
+      <button id="obs-tab-audit" class="subtab" type="button">反馈审计</button>
+    </div>
+
+    <div id="obs-trace" class="subpage active">
+      <div class="toolbar">
+        <input id="trace-session" type="text" placeholder="输入 sessionId">
+        <button id="btn-trace-query" type="button">查询执行路径</button>
+      </div>
+      <div id="trace-result" class="trace-list"><div class="muted">输入 sessionId 查询 Agent 执行链路</div></div>
+    </div>
+
+    <div id="obs-metrics" class="subpage">
+      <div class="toolbar"><button id="btn-obs-refresh" type="button">刷新（近 7 天）</button></div>
+      <div id="obs-metrics-body" class="kpi-row"></div>
+    </div>
+
+    <div id="obs-knowledge" class="subpage">
+      <div class="toolbar"><button id="btn-obs-knowledge" type="button">加载知识明细</button></div>
+      <table class="data-table">
+        <thead><tr><th>chunkId</th><th>docId</th><th>领域</th><th>子领域</th><th>所需身份</th><th>创建人</th><th>来源文件</th><th>版本</th><th>创建时间</th></tr></thead>
+        <tbody id="obs-knowledge-body"><tr><td colspan="9" class="muted">未加载</td></tr></tbody>
+      </table>
+    </div>
+
+    <div id="obs-audit" class="subpage">
+      <div class="toolbar"><button id="btn-obs-audit" type="button">加载审计数据</button></div>
+      <h3>用户反馈</h3>
+      <table class="data-table">
+        <thead><tr><th>ID</th><th>sessionId</th><th>chunkId</th><th>类型</th><th>备注</th><th>时间</th></tr></thead>
+        <tbody id="audit-feedback-body"><tr><td colspan="6" class="muted">未加载</td></tr></tbody>
+      </table>
+      <h3>安全网关拦截记录</h3>
+      <table class="data-table">
+        <thead><tr><th>ID</th><th>方向</th><th>检测器</th><th>结果</th><th>风险分</th><th>userId</th><th>时间</th></tr></thead>
+        <tbody id="audit-gateway-body"><tr><td colspan="7" class="muted">未加载</td></tr></tbody>
+      </table>
+    </div>
+  </section>
 </main>
 
-<script src="app.js"></script>
+<script src="app.js?v=g2g-sess-20260922"></script>
 </body>
 </html>

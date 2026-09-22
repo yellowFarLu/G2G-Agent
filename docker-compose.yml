@@ -1,0 +1,173 @@
+# docker-compose.yml: v1-v5 §11 基础设施容器
+# 一键起 MySQL + Redis + Milvus + Presidio sidecar
+# 用法: docker-compose up -d
+
+version: "3.8"
+
+services:
+  # ============================================================
+  # MySQL（§5 用户档案 + §8 trace 表 + §6.6 知识元数据/指标/冲突）
+  # ============================================================
+  mysql:
+    image: mysql:8.0
+    container_name: wikiagent-mysql
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_PASSWORD:-root}
+      MYSQL_DATABASE: ${MYSQL_DB:-wikiagent}
+    ports:
+      - "${MYSQL_PORT:-3306}:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+    command: --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ============================================================
+  # Redis（§3 短期记忆 + §6 历史事件 SETNX + §22 分布式锁 + §16 Session）
+  # ============================================================
+  redis:
+    image: redis:7-alpine
+    container_name: wikiagent-redis
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes --maxmemory 512mb --maxmemory-policy allkeys-lru
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  # ============================================================
+  # Milvus（§6 历史事件库 父子索引 + §3 检索 向量+BM25 混合检索）
+  # 依赖 etcd + minio
+  # ============================================================
+  etcd:
+    image: quay.io/coreos/etcd:v3.5.5
+    container_name: wikiagent-etcd
+    environment:
+      ETCD_AUTO_COMPACTION_MODE: periodic
+      ETCD_AUTO_COMPACTION_RETENTION: "0"
+      ETCD_QUOTA_BACKEND_BYTES: "8589934592"
+      ETCD_SNAPSHOT_COUNT: "10000"
+    volumes:
+      - etcd_data:/etcd
+    command: etcd -advertise-client-urls=http://etcd:2379 -listen-client-urls=http://0.0.0.0:2379 --data-dir /etcd
+
+  minio:
+    image: minio/minio:RELEASE.2023-03-20T20-16-18Z
+    container_name: wikiagent-minio
+    environment:
+      MINIO_ACCESS_KEY: minioadmin
+      MINIO_SECRET_KEY: minioadmin
+    volumes:
+      - minio_data:/minio_data
+    command: minio server /minio_data --console-address ":9001"
+    ports:
+      - "9001:9001"
+
+  milvus:
+    image: milvusdb/milvus:v2.5.17
+    container_name: wikiagent-milvus
+    depends_on:
+      - etcd
+      - minio
+    environment:
+      ETCD_ENDPOINTS: etcd:2379
+      MINIO_ADDRESS: minio:9000
+    ports:
+      - "${MILVUS_PORT:-19530}:19530"
+    volumes:
+      - milvus_data:/var/lib/milvus
+
+  # ============================================================
+  # Presidio Analyzer sidecar（v5 §19.5 PII 检测/脱敏）
+  # ============================================================
+  presidio-analyzer:
+    image: mcr.microsoft.com/presidio-analyzer:latest
+    container_name: wikiagent-presidio-analyzer
+    ports:
+      - "5050:5050"
+
+  presidio-anonymizer:
+    image: mcr.microsoft.com/presidio-anonymizer:latest
+    container_name: wikiagent-presidio-anonymizer
+    ports:
+      - "5051:5051"
+
+  # ============================================================
+  # Nginx 接入层（v4 §16 分级架构 - sticky session by X-User-Id）
+  # ============================================================
+  nginx:
+    image: nginx:alpine
+    container_name: wikiagent-nginx
+    depends_on:
+      - wikiagent-app-1
+      - wikiagent-app-2
+    ports:
+      - "80:80"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+
+  # 应用副本 1
+  wikiagent-app-1:
+    build: .
+    container_name: wikiagent-app-1
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      milvus:
+        condition: service_started
+    environment:
+      MYSQL_URL: jdbc:mysql://mysql:3306/${MYSQL_DB:-wikiagent}
+      MYSQL_DRIVER: com.mysql.cj.jdbc.Driver
+      MYSQL_USER: root
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-root}
+      REDIS_HOST: redis
+      REDIS_ENABLED: "true"
+      MILVUS_HOST: milvus
+      JPA_DDL: validate
+      HIBERNATE_DIALECT: org.hibernate.dialect.MySQLDialect
+      SESSION_STORE: redis
+      WIKIAGENT_SESSION_REDIS: "true"
+    ports:
+      - "8081:8080"
+
+  # 应用副本 2（横向扩展演示）
+  wikiagent-app-2:
+    build: .
+    container_name: wikiagent-app-2
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      milvus:
+        condition: service_started
+    environment:
+      MYSQL_URL: jdbc:mysql://mysql:3306/${MYSQL_DB:-wikiagent}
+      MYSQL_DRIVER: com.mysql.cj.jdbc.Driver
+      MYSQL_USER: root
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-root}
+      REDIS_HOST: redis
+      REDIS_ENABLED: "true"
+      MILVUS_HOST: milvus
+      JPA_DDL: validate
+      HIBERNATE_DIALECT: org.hibernate.dialect.MySQLDialect
+      SESSION_STORE: redis
+      WIKIAGENT_SESSION_REDIS: "true"
+    ports:
+      - "8082:8080"
+
+volumes:
+  mysql_data:
+  redis_data:
+  etcd_data:
+  minio_data:
+  milvus_data:

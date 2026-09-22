@@ -1,0 +1,14 @@
+{
+  "intent": "customer_intake",
+  "stages": [
+    { "id": "verify_identity",  "label": "身份核验", "delayMs": [300, 600] },
+    { "id": "kyc_check",        "label": "KYC 合规检查", "delayMs": [600, 1200] },
+    { "id": "gen_contract",     "label": "生成电子合同", "delayMs": [800, 1600] },
+    { "id": "activate_account", "label": "开通账户", "delayMs": [400, 900] }
+  ],
+  "dataPlaceholders": {
+    "customer_id": { "template": "CUST-{YYYYMMDD}-{seq:03d}" },
+    "contract_no": { "template": "HT-{seq:06d}" }
+  },
+  "responseTemplate": "客户接入完成 ✅\n\n- 客户编号：{customer_id}\n- 联系人：{customer_name}\n- 合同编号：{contract_no}\n- 账户状态：已激活\n\n下一步建议：引导客户完成首单下单。"
+}

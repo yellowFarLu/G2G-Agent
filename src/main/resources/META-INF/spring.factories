@@ -1,0 +1,6 @@
+# Environment Post Processors
+# 实施校正：spring-core 6.2（Spring Boot 3.5）的 SpringFactoriesLoader
+# 默认资源位置仍为 META-INF/spring.factories（实测 *EnvironmentPostProcessor.imports
+# 不被 EnvironmentPostProcessorsFactory 加载）。
+org.springframework.boot.env.EnvironmentPostProcessor=\
+com.wikiagent.infrastructure.config.ConditionalInfraEnvironmentPostProcessor

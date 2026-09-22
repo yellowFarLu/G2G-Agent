@@ -1,0 +1,15 @@
+{
+  "intent": "ai_coding",
+  "stages": [
+    { "id": "analyze_requirement", "label": "分析需求", "delayMs": [400, 1000] },
+    { "id": "generate_code",       "label": "生成代码", "delayMs": [800, 2000] },
+    { "id": "write_tests",         "label": "编写测试", "delayMs": [500, 1200] },
+    { "id": "run_tests",           "label": "运行测试", "delayMs": [600, 1400] }
+  ],
+  "dataPlaceholders": {
+    "file_path":  { "template": "src/main/java/com/wikiagent/{Module}/{Name}Service.java" },
+    "class_name": { "template": "{Name}Service" },
+    "test_passed": { "values": [12, 18, 24, 30], "pick": "random" }
+  },
+  "responseTemplate": "已为「{requirement_summary}」生成实现。\n\n文件：`{file_path}`\n类：`{class_name}`\n\n```java\n{code_snippet}\n```\n\n单元测试：{test_passed}/{test_passed} 通过 ✅"
+}

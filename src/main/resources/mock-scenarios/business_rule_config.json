@@ -1,0 +1,15 @@
+{
+  "intent": "business_rule_config",
+  "stages": [
+    { "id": "load_current_rules", "label": "读取当前规则", "delayMs": [300, 700] },
+    { "id": "validate_input",    "label": "校验配置项", "delayMs": [400, 900] },
+    { "id": "preview_diff",       "label": "预览变更影响", "delayMs": [600, 1400] },
+    { "id": "save_rule",          "label": "保存规则", "delayMs": [400, 800] }
+  ],
+  "dataPlaceholders": {
+    "rule_id":      { "template": "RULE-{category}-{seq:04d}" },
+    "version":      { "template": "v{seq}" },
+    "impact_count": { "values": [3, 5, 8, 12], "pick": "random" }
+  },
+  "responseTemplate": "业务规则已更新 ✅\n\n- 规则编号：{rule_id}\n- 版本：{version}\n- 影响订单数：{impact_count}\n- 生效时间：{effective_time}\n\n如需回滚，请使用 `RULE-REVERT {rule_id}`。"
+}

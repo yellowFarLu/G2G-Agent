@@ -1,0 +1,14 @@
+{
+  "intent": "order_query",
+  "stages": [
+    { "id": "parse_order_id",  "label": "解析订单号", "delayMs": [200, 500] },
+    { "id": "query_order_db",  "label": "查询订单库", "delayMs": [500, 1200] },
+    { "id": "query_logistics", "label": "查询物流轨迹", "delayMs": [400, 1000] }
+  ],
+  "dataPlaceholders": {
+    "order_id":     { "template": "ORD-{YYYYMMDD}-{seq:04d}" },
+    "logistics_no": { "template": "SF{seq:10d}" },
+    "status":       { "values": ["待发货", "运输中", "已签收", "已结算"], "pick": "weighted" }
+  },
+  "responseTemplate": "订单查询结果 📦\n\n| 字段 | 值 |\n|---|---|\n| 订单号 | {order_id} |\n| 客户 | {customer_name} |\n| 金额 | ¥{amount} |\n| 状态 | {status} |\n| 物流单号 | {logistics_no} |\n\n最新轨迹：{logistics_track}"
+}

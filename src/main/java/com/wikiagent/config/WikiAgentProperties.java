@@ -3,7 +3,14 @@ package com.wikiagent.config;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 
 @ConfigurationProperties(prefix = "wikiagent")
-public record WikiAgentProperties(Milvus milvus, Retrieve retrieve, Ingest ingest) {
+public record WikiAgentProperties(Milvus milvus, Retrieve retrieve, Ingest ingest, Agent agent) {
+
+    /** Agentic RAG 编排配置。 */
+    public record Agent(
+            boolean enabled,
+            int maxRounds,
+            int maxQueriesPerRound) {
+    }
 
     public record Milvus(
             String uri,

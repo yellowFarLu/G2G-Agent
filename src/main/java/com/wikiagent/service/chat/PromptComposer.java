@@ -14,6 +14,10 @@ public final class PromptComposer {
             4. 用简体中文回答，条理清晰、简明扼要。
             """;
 
+    /** 知识库无相关证据时的固定回答。 */
+    public static final String NO_CONTEXT = """
+            知识库中未检索到与该问题相关的内容，暂时无法回答。请先上传相关文档，或换一种问法。""";
+
     private PromptComposer() {
     }
 

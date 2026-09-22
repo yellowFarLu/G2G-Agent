@@ -1,5 +1,9 @@
 package com.wikiagent.controller;
 
+import com.wikiagent.application.knowledge.KnowledgeTagContext;
+import com.wikiagent.domain.identity.BusinessIdentity;
+import com.wikiagent.domain.identity.DomainTag;
+import com.wikiagent.domain.identity.SubDomainTag;
 import com.wikiagent.dto.DocumentView;
 import com.wikiagent.dto.NotFoundException;
 import com.wikiagent.entity.KbDocument;
@@ -9,6 +13,7 @@ import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
@@ -34,7 +39,12 @@ public class DocumentController {
     }
 
     @PostMapping
-    public DocumentView upload(@RequestParam("file") MultipartFile file) throws IOException {
+    public DocumentView upload(@RequestParam("file") MultipartFile file,
+                               @RequestParam(required = false) String domain,
+                               @RequestParam(required = false) String subDomain,
+                               @RequestHeader(value = "X-User-Id", required = false) String userId,
+                               @RequestHeader(value = "X-Business-Identity", required = false) String identity)
+            throws IOException {
         if (file == null || file.isEmpty()) {
             throw new IllegalArgumentException("请选择要上传的文件");
         }
@@ -43,6 +53,24 @@ public class DocumentController {
         if (ext.isBlank()) {
             throw new IllegalArgumentException("无法识别文件扩展名，支持 txt/md/pdf/docx/xlsx");
         }
+
+        // v4 §6.6.1 打标参数校验：显式传入时必须是合法枚举 code
+        if (domain != null && DomainTag.fromCode(domain) == null) {
+            throw new IllegalArgumentException("非法领域标签 domain=" + domain);
+        }
+        if (subDomain != null && SubDomainTag.fromCode(subDomain) == null) {
+            throw new IllegalArgumentException("非法知识类型标签 subDomain=" + subDomain);
+        }
+        if (identity != null && !isValidIdentity(identity)) {
+            throw new IllegalArgumentException("非法业务身份 identity=" + identity);
+        }
+        KnowledgeTagContext tagContext = (domain != null && subDomain != null)
+                ? new KnowledgeTagContext(domain, subDomain,
+                    identity == null ? "business" : identity,
+                    userId == null ? "anonymous" : userId,
+                    identity == null ? "business" : identity,
+                    filename)
+                : KnowledgeTagContext.defaultFor(filename);
 
         String docId = UUID.randomUUID().toString();
         byte[] bytes = file.getBytes();
@@ -58,8 +86,17 @@ public class DocumentController {
         doc.setStatus(KbDocument.PARSING);
         docRepo.save(doc);
 
-        ingestionService.ingest(docId, filename, bytes);
+        ingestionService.ingest(docId, filename, bytes, tagContext);
         return DocumentView.from(doc);
+    }
+
+    private static boolean isValidIdentity(String code) {
+        for (BusinessIdentity i : BusinessIdentity.values()) {
+            if (i.code().equalsIgnoreCase(code)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     @GetMapping
