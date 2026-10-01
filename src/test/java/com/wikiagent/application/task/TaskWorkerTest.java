@@ -276,7 +276,7 @@ class TaskWorkerTest {
                 });
         registry.register(handler);
         RecordingDispatcher rec = (RecordingDispatcher) dispatcher;
-        int before = rec.dispatched.size();
+        int before = normalDispatchCount(rec);
 
         worker.onMessage(taskId, "T8FATAL");
 
@@ -284,7 +284,12 @@ class TaskWorkerTest {
         assertThat(task).isPresent();
         assertThat(task.get().status()).isEqualTo(TaskStatus.FAILED);
         assertThat(task.get().errorCode()).isEqualTo(ErrorCode.VALIDATION_FAILED);
-        assertThat(rec.dispatched.size()).isEqualTo(before);
+        assertThat(normalDispatchCount(rec)).isEqualTo(before);
+    }
+
+    /** 普通任务投递数（排除看门狗消息——LEASE 后固定发出，与任务重投无关）。 */
+    private static int normalDispatchCount(RecordingDispatcher rec) {
+        return (int) rec.dispatched.stream().filter(d -> !d.contains(":watchdog:")).count();
     }
 
     // ⑤ 暂停 → 恢复
@@ -436,7 +441,7 @@ class TaskWorkerTest {
         stepRepo.saveAllIfAbsent(taskId, plan);
         stepRepo.markDone(taskId, 1, "{坏json", Instant.now());
         RecordingDispatcher rec = (RecordingDispatcher) dispatcher;
-        int before = rec.dispatched.size();
+        int before = normalDispatchCount(rec);
 
         worker.onMessage(taskId, "T8CORRUPT");
 
@@ -444,7 +449,7 @@ class TaskWorkerTest {
         assertThat(task).isPresent();
         assertThat(task.get().status()).isEqualTo(TaskStatus.FAILED);
         assertThat(task.get().errorCode()).isEqualTo(ErrorCode.INTERNAL);
-        assertThat(rec.dispatched.size()).isEqualTo(before);
+        assertThat(normalDispatchCount(rec)).isEqualTo(before);
         assertThat(handler.countOf(2)).isZero();
     }
 

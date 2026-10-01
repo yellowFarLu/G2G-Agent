@@ -30,6 +30,7 @@ import com.wikiagent.domain.task.ports.TaskEventRepositoryPort;
 import com.wikiagent.domain.task.ports.TaskRepositoryPort;
 import com.wikiagent.domain.task.ports.TaskStepRepositoryPort;
 import jakarta.annotation.PreDestroy;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
 
@@ -61,6 +62,9 @@ public class TaskWorker implements TaskMessageSink {
 
     private static final ObjectMapper MAPPER = new ObjectMapper();
 
+    /** 看门狗延迟消息等级：RocketMQ level 4=30s，与默认 leaseTtl 30s 对齐。 */
+    private static final int WATCHDOG_DELAY_LEVEL = 4;
+
     private final TaskRepositoryPort taskRepo;
     private final TaskStepRepositoryPort stepRepo;
     private final TaskEventRepositoryPort eventRepo;
@@ -75,6 +79,10 @@ public class TaskWorker implements TaskMessageSink {
     private final ErrorClassifier errorClassifier;
 
     private final String workerId = "w-" + UUID.randomUUID().toString().substring(0, 8);
+
+    /** 字段注入：保持 12 参构造以支持测试手工实例化（手工 new 时为 null，onWatchdog 空转）。 */
+    @Autowired(required = false)
+    private TaskWatchdog watchdog;
     private final ExecutorService stepPool = Executors.newCachedThreadPool(r -> {
         Thread t = new Thread(r, "task-worker-step");
         t.setDaemon(true);
@@ -137,6 +145,8 @@ public class TaskWorker implements TaskMessageSink {
         // LEASE：PENDING/DISPATCH → RUNNING
         task = taskRepo.save(task.withStatus(TaskStateMachine.transition(task.status(), TaskEventType.LEASE)));
         eventRepo.append(event(taskId, TaskEventType.LEASE, null));
+        // 看门狗双保险：leaseTtl 后核对租约/心跳是否存活（规格 1.4）
+        dispatcher.dispatchWatchdog(taskId, workerId, WATCHDOG_DELAY_LEVEL);
 
         ScheduledExecutorService heartbeat = startHeartbeat(taskId);
         try {
@@ -150,8 +160,10 @@ public class TaskWorker implements TaskMessageSink {
 
     @Override
     public void onWatchdog(String taskId, String ownerWorkerId) {
-        // 看门狗核对逻辑在 Task 9（TaskRecoveryJob）落地：核对 owner 租约/心跳存活。
-        // Task 8 阶段消息直接消费丢弃，不产生副作用。
+        // 看门狗核对（Task 9）：仍 RUNNING 且 owner 匹配且心跳停更 → 复用统一回收
+        if (watchdog != null) {
+            watchdog.check(taskId, ownerWorkerId);
+        }
     }
 
     private ScheduledExecutorService startHeartbeat(String taskId) {
