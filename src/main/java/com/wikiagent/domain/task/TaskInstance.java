@@ -63,4 +63,25 @@ public record TaskInstance(
     public TaskInstance withClearLease() {
         return withLease(null, null);
     }
+
+    public TaskInstance withProgress(int newProgress) {
+        return new TaskInstance(taskId, taskType, bizKey, status, payload, attempt, maxAttempts,
+                newProgress, resultRef, errorCode, errorMsg, idempotencyKey, submittedBy, tenantId,
+                enqueueAt, leaseOwner, leaseExpireAt, heartbeatAt, nextRunAt, suspendReason,
+                controlVersion, createdAt, updatedAt);
+    }
+
+    public TaskInstance withResultRef(String newResultRef) {
+        return new TaskInstance(taskId, taskType, bizKey, status, payload, attempt, maxAttempts,
+                progressPercent, newResultRef, errorCode, errorMsg, idempotencyKey, submittedBy, tenantId,
+                enqueueAt, leaseOwner, leaseExpireAt, heartbeatAt, nextRunAt, suspendReason,
+                controlVersion, createdAt, updatedAt);
+    }
+
+    public TaskInstance withError(ErrorCode newErrorCode, String newErrorMsg) {
+        return new TaskInstance(taskId, taskType, bizKey, status, payload, attempt, maxAttempts,
+                progressPercent, resultRef, newErrorCode, newErrorMsg, idempotencyKey, submittedBy, tenantId,
+                enqueueAt, leaseOwner, leaseExpireAt, heartbeatAt, nextRunAt, suspendReason,
+                controlVersion, createdAt, updatedAt);
+    }
 }

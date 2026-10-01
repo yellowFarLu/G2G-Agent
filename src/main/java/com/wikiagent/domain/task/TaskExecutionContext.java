@@ -86,6 +86,11 @@ public final class TaskExecutionContext {
         this.currentStepNo = stepNo;
     }
 
+    /** 当前正在执行的步骤号（worker 设置；未设置返回 null）。 */
+    public Integer currentStepNo() {
+        return currentStepNo;
+    }
+
     public String checkpointOf(int stepNo) {
         return checkpoints.get(stepNo);
     }

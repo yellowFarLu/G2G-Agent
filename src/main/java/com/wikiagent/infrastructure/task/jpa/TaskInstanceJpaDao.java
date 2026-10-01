@@ -40,12 +40,13 @@ public interface TaskInstanceJpaDao extends JpaRepository<TaskInstanceEntity, Lo
     List<TaskInstanceEntity> findExpiredLeases(@Param("now") LocalDateTime now,
                                                @Param("limit") int limit);
 
-    /** CAS 抢租约：无主或已过期才成功。 */
+    /** CAS 抢租约：仅 PENDING/DISPATCH 且无主或已过期才成功（规格 3.1 ①②）。 */
     @Modifying(flushAutomatically = true)
     @Query("""
             update TaskInstanceEntity t
             set t.leaseOwner = :workerId, t.leaseExpireAt = :expireAt, t.updatedAt = :now
             where t.taskId = :taskId
+              and t.status in ('PENDING', 'DISPATCH')
               and (t.leaseOwner is null or t.leaseExpireAt is null or t.leaseExpireAt < :now)
             """)
     int casLease(@Param("taskId") String taskId,
