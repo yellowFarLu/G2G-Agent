@@ -172,14 +172,6 @@ class TaskWorkerTest {
                 t.controlVersion(), t.createdAt(), Instant.now());
     }
 
-    private TaskInstance withSuspendReason(TaskInstance t, String reason) {
-        return new TaskInstance(t.taskId(), t.taskType(), t.bizKey(), t.status(), t.payload(),
-                t.attempt(), t.maxAttempts(), t.progressPercent(), t.resultRef(), t.errorCode(),
-                t.errorMsg(), t.idempotencyKey(), t.submittedBy(), t.tenantId(), t.enqueueAt(),
-                t.leaseOwner(), t.leaseExpireAt(), t.heartbeatAt(), t.nextRunAt(), reason,
-                t.controlVersion() + 1, t.createdAt(), Instant.now());
-    }
-
     // ① happy path
     @Test
     void happyPathCompletesAllSteps() {
@@ -461,8 +453,9 @@ class TaskWorkerTest {
         FakeHandler handler = new FakeHandler("T8DBPAUSE",
                 List.of(StepDef.of(1, "A", "s1")), (no, ctx) -> StepResult.done(50));
         registry.register(handler);
-        // 不写 Redis 标志（ControlFlagPort 读为 NONE），仅 DB 有暂停痕迹
-        repo.save(withSuspendReason(repo.findByTaskId(taskId).orElseThrow(), "管理员暂停"));
+        // 不写 Redis 标志（ControlFlagPort 读为 NONE），仅经定向更新写 DB 暂停痕迹
+        // （suspendReason/controlVersion 由控制面定向更新独占，taskRepo.save 不再覆盖）
+        repo.updateControlTrace(taskId, "管理员暂停", controlPort.currentVersion(taskId) + 1);
 
         worker.onMessage(taskId, "T8DBPAUSE");
 

@@ -85,17 +85,7 @@ public record TaskInstance(
                 controlVersion, createdAt, updatedAt);
     }
 
-    public TaskInstance withSuspendReason(String newSuspendReason) {
-        return new TaskInstance(taskId, taskType, bizKey, status, payload, attempt, maxAttempts,
-                progressPercent, resultRef, errorCode, errorMsg, idempotencyKey, submittedBy, tenantId,
-                enqueueAt, leaseOwner, leaseExpireAt, heartbeatAt, nextRunAt, newSuspendReason,
-                controlVersion, createdAt, updatedAt);
-    }
-
-    public TaskInstance withControlVersion(int newControlVersion) {
-        return new TaskInstance(taskId, taskType, bizKey, status, payload, attempt, maxAttempts,
-                progressPercent, resultRef, errorCode, errorMsg, idempotencyKey, submittedBy, tenantId,
-                enqueueAt, leaseOwner, leaseExpireAt, heartbeatAt, nextRunAt, suspendReason,
-                newControlVersion, createdAt, updatedAt);
-    }
+    // 控制痕迹字段（suspendReason/controlVersion）不提供 wither：
+    // 仅可经 TaskRepositoryPort.updateControlTrace / casResume / casCanceling 定向更新写入，
+    // 避免全量保存以旧快照复活或清除控制面痕迹（丢失更新防护）。
 }

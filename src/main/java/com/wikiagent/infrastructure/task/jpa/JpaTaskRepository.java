@@ -55,7 +55,8 @@ public class JpaTaskRepository implements TaskRepositoryPort {
     public TaskInstance save(TaskInstance t) {
         // upsert by taskId：存在则字段级覆盖，否则插入（唯一键冲突同步抛出）
         TaskInstanceEntity entity = dao.findByTaskId(t.taskId()).orElseGet(TaskInstanceEntity::new);
-        applyRecord(entity, t);
+        boolean existing = entity.getId() != null;
+        applyRecord(entity, t, existing);
         return toRecord(dao.saveAndFlush(entity));
     }
 
@@ -117,7 +118,7 @@ public class JpaTaskRepository implements TaskRepositoryPort {
                 .toList();
     }
 
-    private void applyRecord(TaskInstanceEntity e, TaskInstance t) {
+    private void applyRecord(TaskInstanceEntity e, TaskInstance t, boolean existing) {
         e.setTaskId(t.taskId());
         e.setTaskType(t.taskType());
         e.setBizKey(t.bizKey());
@@ -137,8 +138,13 @@ public class JpaTaskRepository implements TaskRepositoryPort {
         e.setLeaseExpireAt(toLocalDateTime(t.leaseExpireAt()));
         e.setHeartbeatAt(toLocalDateTime(t.heartbeatAt()));
         e.setNextRunAt(toLocalDateTime(t.nextRunAt()));
-        e.setSuspendReason(t.suspendReason());
-        e.setControlVersion(t.controlVersion());
+        if (!existing) {
+            // 新增行：控制痕迹按提交快照落库（初始为 null/0）
+            e.setSuspendReason(t.suspendReason());
+            e.setControlVersion(t.controlVersion());
+        }
+        // 已存在行：suspendReason/controlVersion 由 TaskControlService 定向更新独占维护，
+        // worker 全量保存不得覆盖（否则步骤执行期间写入的暂停痕迹会被旧快照复活/清除）
         if (e.getCreatedAt() == null) {
             e.setCreatedAt(toLocalDateTime(t.createdAt()));
         }

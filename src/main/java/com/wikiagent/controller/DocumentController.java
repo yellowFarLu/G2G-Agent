@@ -1,14 +1,21 @@
 package com.wikiagent.controller;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.wikiagent.application.knowledge.KnowledgeTagContext;
+import com.wikiagent.application.task.TaskQueryService;
+import com.wikiagent.application.task.TaskSubmissionService;
 import com.wikiagent.domain.identity.BusinessIdentity;
 import com.wikiagent.domain.identity.DomainTag;
 import com.wikiagent.domain.identity.SubDomainTag;
+import com.wikiagent.domain.task.TaskInstance;
+import com.wikiagent.domain.task.TaskPayload;
 import com.wikiagent.dto.DocumentView;
 import com.wikiagent.dto.NotFoundException;
 import com.wikiagent.entity.KbDocument;
 import com.wikiagent.repo.KbDocumentRepo;
 import com.wikiagent.service.ingest.IngestionService;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -22,6 +29,8 @@ import org.springframework.web.multipart.MultipartFile;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.util.List;
 import java.util.UUID;
 
@@ -30,12 +39,20 @@ import java.util.UUID;
 @RequestMapping("/api/documents")
 public class DocumentController {
 
+    private static final ObjectMapper MAPPER = new ObjectMapper();
+
     private final KbDocumentRepo docRepo;
     private final IngestionService ingestionService;
+    private final ObjectProvider<TaskSubmissionService> submission;
+    private final ObjectProvider<TaskQueryService> taskQuery;
 
-    public DocumentController(KbDocumentRepo docRepo, IngestionService ingestionService) {
+    public DocumentController(KbDocumentRepo docRepo, IngestionService ingestionService,
+                              ObjectProvider<TaskSubmissionService> submission,
+                              ObjectProvider<TaskQueryService> taskQuery) {
         this.docRepo = docRepo;
         this.ingestionService = ingestionService;
+        this.submission = submission;
+        this.taskQuery = taskQuery;
     }
 
     @PostMapping
@@ -64,16 +81,26 @@ public class DocumentController {
         if (identity != null && !isValidIdentity(identity)) {
             throw new IllegalArgumentException("非法业务身份 identity=" + identity);
         }
+
+        String owner = userId == null ? "anonymous" : userId;
+        byte[] bytes = file.getBytes();
+
+        // 任务框架路径：bizKey=ingest:{sha256}:{userId} 幂等提交，六步流水线异步执行
+        if (submission.getIfAvailable() != null) {
+            return uploadViaTask(bytes, filename, ext, owner,
+                    domain, subDomain, identity);
+        }
+
+        // 旧异步路径（task.enabled=false）：@Async 入库，行为不变
         KnowledgeTagContext tagContext = (domain != null && subDomain != null)
                 ? new KnowledgeTagContext(domain, subDomain,
                     identity == null ? "business" : identity,
-                    userId == null ? "anonymous" : userId,
+                    owner,
                     identity == null ? "business" : identity,
                     filename)
                 : KnowledgeTagContext.defaultFor(filename);
 
         String docId = UUID.randomUUID().toString();
-        byte[] bytes = file.getBytes();
         Path dir = Path.of("data", "uploads", docId);
         Files.createDirectories(dir);
         Files.write(dir.resolve(filename), bytes);
@@ -88,6 +115,80 @@ public class DocumentController {
 
         ingestionService.ingest(docId, filename, bytes, tagContext);
         return DocumentView.from(doc);
+    }
+
+    /** 任务框架路径：同内容同人重复上传 → 命中 bizKey 幂等，返回既有 taskId 不重复入库。 */
+    private DocumentView uploadViaTask(byte[] bytes, String filename, String ext, String owner,
+                                       String domain, String subDomain, String identity) throws IOException {
+        String bizKey = "ingest:" + sha256Hex(bytes) + ":" + owner;
+        var existing = taskQueryAvailable().findByBizKey(bizKey);
+        if (existing.isPresent()) {
+            TaskInstance task = existing.get();
+            String origDocId = task.payload() == null ? null : task.payload().path("docId").asText(null);
+            KbDocument orig = origDocId == null ? null : docRepo.findById(origDocId).orElse(null);
+            if (orig != null) {
+                return DocumentView.of(orig, task.taskId(), true);
+            }
+        }
+
+        String docId = UUID.randomUUID().toString();
+        Path dir = Path.of("data", "uploads", docId);
+        Files.createDirectories(dir);
+        Files.write(dir.resolve(filename), bytes);
+
+        KbDocument doc = new KbDocument();
+        doc.setId(docId);
+        doc.setFilename(filename);
+        doc.setDocType(ext);
+        doc.setSizeBytes(bytes.length);
+        doc.setStatus(KbDocument.PARSING);
+        docRepo.save(doc);
+
+        ObjectNode args = MAPPER.createObjectNode()
+                .put("docId", docId)
+                .put("filename", filename)
+                .put("userId", owner);
+        if (domain != null) {
+            args.put("domain", domain);
+        }
+        if (subDomain != null) {
+            args.put("subDomain", subDomain);
+        }
+        if (identity != null) {
+            args.put("identity", identity);
+        }
+        TaskInstance task = submissionAvailable()
+                .submit(new TaskPayload("INGEST", bizKey, owner, null, null, args, null, null));
+        return DocumentView.of(doc, task.taskId(), false);
+    }
+
+    private TaskQueryService taskQueryAvailable() {
+        TaskQueryService s = taskQuery.getIfAvailable();
+        if (s == null) {
+            throw new IllegalStateException("任务框架未开启（wikiagent.task.enabled=false）");
+        }
+        return s;
+    }
+
+    private TaskSubmissionService submissionAvailable() {
+        TaskSubmissionService s = submission.getIfAvailable();
+        if (s == null) {
+            throw new IllegalStateException("任务框架未开启（wikiagent.task.enabled=false）");
+        }
+        return s;
+    }
+
+    private static String sha256Hex(byte[] bytes) {
+        try {
+            MessageDigest md = MessageDigest.getInstance("SHA-256");
+            StringBuilder sb = new StringBuilder();
+            for (byte b : md.digest(bytes)) {
+                sb.append(String.format("%02x", b));
+            }
+            return sb.toString();
+        } catch (NoSuchAlgorithmException e) {
+            throw new IllegalStateException("SHA-256 不可用", e);
+        }
     }
 
     private static boolean isValidIdentity(String code) {

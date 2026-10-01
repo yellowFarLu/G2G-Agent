@@ -67,4 +67,9 @@ public class TaskQueryService {
     public boolean existsByBizKey(String bizKey) {
         return bizKey != null && taskRepo.findByBizKey(bizKey).isPresent();
     }
+
+    /** 按 bizKey 查任务（上传幂等：同内容同人重复上传指向既有任务）。 */
+    public java.util.Optional<TaskInstance> findByBizKey(String bizKey) {
+        return bizKey == null ? java.util.Optional.empty() : taskRepo.findByBizKey(bizKey);
+    }
 }
