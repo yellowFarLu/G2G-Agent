@@ -78,6 +78,11 @@
 | 历史事件 | **Milvus** | 父子索引事件库，chunk 级软删除（`is_active`） |
 | 交接清单 | **todo.json** | 每个任务节点实时生成，含原始请求、已执行节点、放弃路径、数据索引 |
 
+### ⚙️ 可靠任务框架
+| 能力 | 说明 |
+|---|---|
+| **任务框架** | MySQL 状态机（权威真相源）+ RocketMQ 投递（本地 `TASK_MQ=local` 零中间件降级）+ Redis 协调：入库/Agent 任务 bizKey 幂等提交、步骤级 checkpoint 断点续跑、暂停/取消/人工接管全留痕、Worker 崩溃后 60s 内自动回收续跑，交接清单 MySQL 化不再产生 todo.json |
+
 ### 🚦 LLM 成本路由
 ```
 用户提问 ──► qwen-flash（意图识别，最便宜）
@@ -146,6 +151,8 @@ docker-compose up -d
 | `WIKIAGENT_FALLBACK_WEB_SEARCH_ENABLED` | `true` | 知识库未命中联网搜索兜底 |
 | `WIKIAGENT_FALLBACK_OWN_KNOWLEDGE_ENABLED` | `true` | 知识库未命中模型自身知识兜底 |
 | `WIKIAGENT_CHAT_MODEL` | `qwen-plus` | 主对话模型（`text-embedding-v4` 向量） |
+| `TASK_MQ` | `local` | 任务投递通道：`local`（JVM 本地调度）/ `rocketmq` |
+| `ROCKETMQ_NAME_SERVER` | `127.0.0.1:9876` | RocketMQ NameServer 地址（`TASK_MQ=rocketmq` 时生效） |
 
 ---
 
