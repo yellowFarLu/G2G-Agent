@@ -28,4 +28,10 @@ public interface TaskRepositoryPort {
     boolean casLease(String taskId, String workerId, Instant expireAt);
 
     void updateHeartbeat(String taskId, Instant at);
+
+    /** 投递成功后记账（outbox 确认时间戳），补偿扫描据此跳过未滞留窗口。 */
+    void markEnqueued(String taskId, Instant at);
+
+    /** 同租户 RUNNING 任务数（租户并发上限判定用）。 */
+    long countRunningByTenant(String tenantId);
 }

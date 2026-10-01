@@ -85,6 +85,16 @@ public class JpaTaskRepository implements TaskRepositoryPort {
         dao.updateHeartbeat(taskId, toLocalDateTime(at));
     }
 
+    @Override
+    public void markEnqueued(String taskId, Instant at) {
+        dao.markEnqueued(taskId, toLocalDateTime(at));
+    }
+
+    @Override
+    public long countRunningByTenant(String tenantId) {
+        return dao.countByStatusAndTenantId(TaskStatus.RUNNING.name(), tenantId);
+    }
+
     private void applyRecord(TaskInstanceEntity e, TaskInstance t) {
         e.setTaskId(t.taskId());
         e.setTaskType(t.taskType());

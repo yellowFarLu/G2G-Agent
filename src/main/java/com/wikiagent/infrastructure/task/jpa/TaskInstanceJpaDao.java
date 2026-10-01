@@ -56,4 +56,10 @@ public interface TaskInstanceJpaDao extends JpaRepository<TaskInstanceEntity, Lo
     @Modifying(flushAutomatically = true)
     @Query("update TaskInstanceEntity t set t.heartbeatAt = :at, t.updatedAt = :at where t.taskId = :taskId")
     int updateHeartbeat(@Param("taskId") String taskId, @Param("at") LocalDateTime at);
+
+    @Modifying(flushAutomatically = true)
+    @Query("update TaskInstanceEntity t set t.enqueueAt = :at, t.updatedAt = :at where t.taskId = :taskId")
+    int markEnqueued(@Param("taskId") String taskId, @Param("at") LocalDateTime at);
+
+    long countByStatusAndTenantId(String status, String tenantId);
 }
