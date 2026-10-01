@@ -40,7 +40,7 @@ import java.util.Map;
  * Python 脚本失败不影响主流程（仅告警）。
  */
 @Service
-@ConditionalOnProperty(name = "wikiagent.memory.handover-adapter", havingValue = "file", matchIfMissing = true)
+@ConditionalOnProperty(name = "wikiagent.memory.handover-adapter", havingValue = "file")
 public class FileHandoverRepository implements HandoverRepository {
 
     private static final Logger log = LoggerFactory.getLogger(FileHandoverRepository.class);
