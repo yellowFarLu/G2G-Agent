@@ -84,4 +84,18 @@ public record TaskInstance(
                 enqueueAt, leaseOwner, leaseExpireAt, heartbeatAt, nextRunAt, suspendReason,
                 controlVersion, createdAt, updatedAt);
     }
+
+    public TaskInstance withSuspendReason(String newSuspendReason) {
+        return new TaskInstance(taskId, taskType, bizKey, status, payload, attempt, maxAttempts,
+                progressPercent, resultRef, errorCode, errorMsg, idempotencyKey, submittedBy, tenantId,
+                enqueueAt, leaseOwner, leaseExpireAt, heartbeatAt, nextRunAt, newSuspendReason,
+                controlVersion, createdAt, updatedAt);
+    }
+
+    public TaskInstance withControlVersion(int newControlVersion) {
+        return new TaskInstance(taskId, taskType, bizKey, status, payload, attempt, maxAttempts,
+                progressPercent, resultRef, errorCode, errorMsg, idempotencyKey, submittedBy, tenantId,
+                enqueueAt, leaseOwner, leaseExpireAt, heartbeatAt, nextRunAt, suspendReason,
+                newControlVersion, createdAt, updatedAt);
+    }
 }

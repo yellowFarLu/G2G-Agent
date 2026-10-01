@@ -25,9 +25,10 @@ public final class Backoff {
         return durationForLevel(delayLevelForAttempt(attempt));
     }
 
-    /** RocketMQ 延迟等级 → 本地调度时长（3→10s、4→30s、6→2m，未知档取 2m）。 */
+    /** RocketMQ 延迟等级 → 本地调度时长（0=立即、3→10s、4→30s、6→2m，未知档取 2m）。 */
     public static Duration durationForLevel(int level) {
         return switch (level) {
+            case 0 -> Duration.ZERO;
             case 3 -> Duration.ofSeconds(10);
             case 4 -> Duration.ofSeconds(30);
             default -> Duration.ofMinutes(2);

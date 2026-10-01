@@ -17,8 +17,8 @@ public interface HumanTaskJpaDao extends JpaRepository<HumanTaskEntity, Long> {
 
     List<HumanTaskEntity> findByStatusInAndClaimedBy(List<String> statuses, String claimedBy);
 
-    /** OPEN→CLAIMED 的 CAS 认领。 */
-    @Modifying(flushAutomatically = true)
+    /** OPEN→CLAIMED 的 CAS 认领。批量更新绕过持久化上下文，clear 防止后续读到一级缓存旧实体。 */
+    @Modifying(flushAutomatically = true, clearAutomatically = true)
     @Query("""
             update HumanTaskEntity h
             set h.status = 'CLAIMED', h.claimedBy = :userId, h.claimedAt = :now, h.lockVersion = h.lockVersion + 1
@@ -29,8 +29,8 @@ public interface HumanTaskJpaDao extends JpaRepository<HumanTaskEntity, Long> {
                  @Param("expectedLockVersion") int expectedLockVersion,
                  @Param("now") LocalDateTime now);
 
-    /** 终结人工任务（OPEN 或 CLAIMED 均可 resolve）。 */
-    @Modifying(flushAutomatically = true)
+    /** 终结人工任务（OPEN 或 CLAIMED 均可 resolve）。批量更新绕过持久化上下文，clear 防脏读。 */
+    @Modifying(flushAutomatically = true, clearAutomatically = true)
     @Query("""
             update HumanTaskEntity h
             set h.status = 'RESOLVED', h.resolvedBy = :userId, h.resolvedAt = :now, h.formValue = :formValue

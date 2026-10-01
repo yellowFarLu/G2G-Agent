@@ -1,6 +1,7 @@
 package com.wikiagent.domain.task.ports;
 
 import com.wikiagent.domain.task.TaskInstance;
+import com.wikiagent.domain.task.TaskStatus;
 
 import java.time.Duration;
 import java.time.Instant;
@@ -32,6 +33,18 @@ public interface TaskRepositoryPort {
     /** 投递成功后记账（outbox 确认时间戳），补偿扫描据此跳过未滞留窗口。 */
     void markEnqueued(String taskId, Instant at);
 
+    /** 控制痕迹定向更新（suspend/resume）：仅写 suspend_reason/control_version，不触状态与租约；终态任务不生效。 */
+    void updateControlTrace(String taskId, String suspendReason, int controlVersion);
+
+    /** 取消 CAS：RUNNING/SUSPENDED → CANCELING（原子），返回受影响行数（0=状态已变化）。 */
+    int casCanceling(String taskId, int controlVersion);
+
+    /** 恢复 CAS：SUSPENDED → PENDING 并清租约与暂停痕迹，返回受影响行数。 */
+    int casResume(String taskId, int controlVersion);
+
     /** 同租户 RUNNING 任务数（租户并发上限判定用）。 */
     long countRunningByTenant(String tenantId);
+
+    /** 列表查询：status/submittedBy 均可空（null 不过滤），createdAt 倒序。 */
+    List<TaskInstance> search(TaskStatus status, String submittedBy, int limit);
 }

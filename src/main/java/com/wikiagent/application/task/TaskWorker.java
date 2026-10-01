@@ -20,6 +20,7 @@ import com.wikiagent.domain.task.TaskExecutionContext;
 import com.wikiagent.domain.task.TaskHandler;
 import com.wikiagent.domain.task.TaskInstance;
 import com.wikiagent.domain.task.TaskStateMachine;
+import com.wikiagent.domain.task.TaskStatus;
 import com.wikiagent.domain.task.TaskStep;
 import com.wikiagent.domain.task.ports.ControlFlagPort;
 import com.wikiagent.domain.task.ports.HumanTaskRepositoryPort;
@@ -312,9 +313,14 @@ public class TaskWorker implements TaskMessageSink {
     }
 
     private void retryTask(TaskInstance task, ErrorCode code, String msg) {
+        if (yieldToCancelFlow(task.taskId(), task)) {
+            return;
+        }
+        // 以库内最新记录为基：步骤执行期间控制面的 suspendReason/controlVersion 不被覆盖
+        TaskInstance base = taskRepo.findByTaskId(task.taskId()).orElse(task);
         int newAttempt = task.attempt() + 1;
-        TaskInstance updated = task
-                .withStatus(TaskStateMachine.transition(task.status(), TaskEventType.RETRY))
+        TaskInstance updated = base
+                .withStatus(TaskStateMachine.transition(base.status(), TaskEventType.RETRY))
                 .withAttempt(newAttempt)
                 .withNextRunAt(Instant.now().plus(Backoff.durationForAttempt(newAttempt)))
                 .withError(code, msg)
@@ -328,8 +334,12 @@ public class TaskWorker implements TaskMessageSink {
     }
 
     private void failTask(TaskInstance task, ErrorCode code, String msg) {
-        TaskInstance updated = task
-                .withStatus(TaskStateMachine.transition(task.status(), TaskEventType.FAIL))
+        if (yieldToCancelFlow(task.taskId(), task)) {
+            return;
+        }
+        TaskInstance base = taskRepo.findByTaskId(task.taskId()).orElse(task);
+        TaskInstance updated = base
+                .withStatus(TaskStateMachine.transition(base.status(), TaskEventType.FAIL))
                 .withError(code, msg)
                 .withClearLease();
         taskRepo.save(updated);
@@ -340,8 +350,12 @@ public class TaskWorker implements TaskMessageSink {
     }
 
     private void suspendTask(TaskInstance task) {
-        TaskInstance updated = task
-                .withStatus(TaskStateMachine.transition(task.status(), TaskEventType.SUSPEND))
+        if (yieldToCancelFlow(task.taskId(), task)) {
+            return;
+        }
+        TaskInstance base = taskRepo.findByTaskId(task.taskId()).orElse(task);
+        TaskInstance updated = base
+                .withStatus(TaskStateMachine.transition(base.status(), TaskEventType.SUSPEND))
                 .withClearLease();
         taskRepo.save(updated);
         eventRepo.append(event(task.taskId(), TaskEventType.SUSPEND, null));
@@ -351,14 +365,22 @@ public class TaskWorker implements TaskMessageSink {
 
     private void cancelTask(TaskInstance task, TaskHandler handler, TaskExecutionContext ctx) {
         String taskId = task.taskId();
-        // REQUEST_CANCEL：RUNNING → CANCELING
-        taskRepo.save(task.withStatus(TaskStateMachine.transition(task.status(), TaskEventType.REQUEST_CANCEL)));
-        eventRepo.append(event(taskId, TaskEventType.REQUEST_CANCEL, null));
+        // REQUEST_CANCEL：RUNNING/SUSPENDED → CANCELING（取消 API 可能已抢先迁移，幂等跳过）
+        TaskInstance base = taskRepo.findByTaskId(taskId).orElse(task);
+        if (base.status() != TaskStatus.CANCELING) {
+            taskRepo.save(base.withStatus(
+                    TaskStateMachine.transition(base.status(), TaskEventType.REQUEST_CANCEL)));
+            eventRepo.append(event(taskId, TaskEventType.REQUEST_CANCEL, null));
+        }
         handler.onCancel(ctx);
         // CANCEL：CANCELING → CANCELLED（终态）
-        TaskInstance cancelled = taskRepo.findByTaskId(taskId).orElse(task)
-                .withStatus(TaskStateMachine.transition(
-                        taskRepo.findByTaskId(taskId).orElse(task).status(), TaskEventType.CANCEL))
+        finalizeCancel(taskId, taskRepo.findByTaskId(taskId).orElse(base));
+    }
+
+    /** CANCELING → CANCELLED（终态）：cancelTask 与让位路径共用。 */
+    private void finalizeCancel(String taskId, TaskInstance canceling) {
+        TaskInstance cancelled = canceling
+                .withStatus(TaskStateMachine.transition(canceling.status(), TaskEventType.CANCEL))
                 .withClearLease();
         taskRepo.save(cancelled);
         eventRepo.append(event(taskId, TaskEventType.CANCEL, null));
@@ -366,34 +388,61 @@ public class TaskWorker implements TaskMessageSink {
                 MAPPER.createObjectNode().put("status", "CANCELLED")));
     }
 
+    /**
+     * 控制面取消流程已介入时 worker 让位：CANCELING 代为收尾到 CANCELLED
+     * （取消请求到达时步骤已结束、不再有边界检查点），已 CANCELLED 直接让位。
+     * 返回 true 表示取消流程已接管，调用方跳过本次保存与后续动作。
+     */
+    private boolean yieldToCancelFlow(String taskId, TaskInstance snapshot) {
+        TaskInstance base = taskRepo.findByTaskId(taskId).orElse(snapshot);
+        if (base.status() == TaskStatus.CANCELLED) {
+            return true;
+        }
+        if (base.status() == TaskStatus.CANCELING) {
+            finalizeCancel(taskId, base);
+            return true;
+        }
+        return false;
+    }
+
     private void waitHuman(TaskInstance task, StepDef def, HumanRequiredException h) {
-        humanRepo.save(new HumanTask(null, task.taskId(), def.no(), h.getKind(), h.getTitle(),
+        String taskId = task.taskId();
+        if (yieldToCancelFlow(taskId, task)) {
+            return;
+        }
+        humanRepo.save(new HumanTask(null, taskId, def.no(), h.getKind(), h.getTitle(),
                 h.getInstruction(), h.getFormSchema(), null, HumanTaskStatus.OPEN,
                 null, null, null, null, 0, Instant.now()));
-        TaskInstance updated = task
-                .withStatus(TaskStateMachine.transition(task.status(), TaskEventType.WAIT_HUMAN))
+        TaskInstance base = taskRepo.findByTaskId(taskId).orElse(task);
+        TaskInstance updated = base
+                .withStatus(TaskStateMachine.transition(base.status(), TaskEventType.WAIT_HUMAN))
                 .withClearLease();
         taskRepo.save(updated);
-        eventRepo.append(event(task.taskId(), TaskEventType.WAIT_HUMAN,
+        eventRepo.append(event(taskId, TaskEventType.WAIT_HUMAN,
                 MAPPER.createObjectNode().put("stepNo", def.no())
                         .put("kind", h.getKind().name())
                         .put("title", h.getTitle())));
-        streamBus.publish(new StreamEvent(task.taskId(), "progress",
+        streamBus.publish(new StreamEvent(taskId, "progress",
                 MAPPER.createObjectNode().put("status", "WAITING_HUMAN")
                         .put("stepNo", def.no())));
     }
 
     private void completeTask(TaskInstance task, String resultRef) {
-        TaskInstance updated = task
-                .withStatus(TaskStateMachine.transition(task.status(), TaskEventType.COMPLETE))
+        String taskId = task.taskId();
+        if (yieldToCancelFlow(taskId, task)) {
+            return;
+        }
+        TaskInstance base = taskRepo.findByTaskId(taskId).orElse(task);
+        TaskInstance updated = base
+                .withStatus(TaskStateMachine.transition(base.status(), TaskEventType.COMPLETE))
                 .withProgress(100)
                 .withResultRef(resultRef)
                 .withClearLease();
         taskRepo.save(updated);
-        eventRepo.append(event(task.taskId(), TaskEventType.COMPLETE,
+        eventRepo.append(event(taskId, TaskEventType.COMPLETE,
                 resultRef == null ? null : MAPPER.createObjectNode().put("resultRef", resultRef)));
-        progressPort.publish(task.taskId(), 100, null);
-        streamBus.publish(new StreamEvent(task.taskId(), "done",
+        progressPort.publish(taskId, 100, null);
+        streamBus.publish(new StreamEvent(taskId, "done",
                 MAPPER.createObjectNode().put("status", "COMPLETED")
                         .put("resultRef", String.valueOf(resultRef))));
     }

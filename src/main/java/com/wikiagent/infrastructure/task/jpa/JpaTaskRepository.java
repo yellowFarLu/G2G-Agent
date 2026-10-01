@@ -91,8 +91,30 @@ public class JpaTaskRepository implements TaskRepositoryPort {
     }
 
     @Override
+    public void updateControlTrace(String taskId, String suspendReason, int controlVersion) {
+        dao.updateControlTrace(taskId, suspendReason, controlVersion, toLocalDateTime(Instant.now()));
+    }
+
+    @Override
+    public int casCanceling(String taskId, int controlVersion) {
+        return dao.casCanceling(taskId, controlVersion, toLocalDateTime(Instant.now()));
+    }
+
+    @Override
+    public int casResume(String taskId, int controlVersion) {
+        return dao.casResume(taskId, controlVersion, toLocalDateTime(Instant.now()));
+    }
+
+    @Override
     public long countRunningByTenant(String tenantId) {
         return dao.countByStatusAndTenantId(TaskStatus.RUNNING.name(), tenantId);
+    }
+
+    @Override
+    public List<TaskInstance> search(TaskStatus status, String submittedBy, int limit) {
+        return dao.search(status == null ? null : status.name(), submittedBy, limit).stream()
+                .map(this::toRecord)
+                .toList();
     }
 
     private void applyRecord(TaskInstanceEntity e, TaskInstance t) {

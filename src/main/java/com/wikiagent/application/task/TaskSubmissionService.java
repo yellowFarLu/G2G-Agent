@@ -78,9 +78,10 @@ public class TaskSubmissionService {
      */
     public TaskInstance replay(String taskId, String actorId) {
         TaskInstance task = taskRepo.findByTaskId(taskId)
-                .orElseThrow(() -> new IllegalArgumentException("任务不存在: " + taskId));
+                .orElseThrow(() -> new com.wikiagent.dto.NotFoundException("任务不存在: " + taskId));
         if (task.status() != TaskStatus.FAILED && task.status() != TaskStatus.CANCELLED) {
-            throw new IllegalStateException("仅 FAILED/CANCELLED 任务可重放，当前状态: " + task.status());
+            throw new com.wikiagent.dto.ConflictException(
+                    "仅 FAILED/CANCELLED 任务可重放，当前状态: " + task.status());
         }
         TaskInstance updated = task
                 .withStatus(TaskStateMachine.transition(task.status(), TaskEventType.REPLAY))
