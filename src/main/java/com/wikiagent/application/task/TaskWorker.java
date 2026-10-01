@@ -221,12 +221,13 @@ public class TaskWorker implements TaskMessageSink {
         // 索引遍历：循环内 mergeRegistered 会向 plan 追加动态注册步骤，不能用 for-each
         int idx = 0;
         while (idx < plan.size()) {
+            // 先并入动态注册步骤再取当前步（AGENT：PLAN 注册的 NODE 必须先于 GENERATE 执行）
+            mergeRegistered(ctx, plan);
             StepDef def = plan.get(idx);
             idx++;
             if (def.no() < startNo) {
                 continue;
             }
-            mergeRegistered(ctx, plan);
             // ⑤ 步骤边界控制检查（主线程双读）
             TaskControlContext.set(new TaskControlContext.Ctx(taskId, controlFlagPort, taskRepo));
             try {
@@ -289,6 +290,9 @@ public class TaskWorker implements TaskMessageSink {
 
             // 步骤成功：落步骤终态 + 推进进度
             stepRepo.markDone(taskId, def.no(), result.skip() ? null : result.checkpointJson(), Instant.now());
+            // 动态注册步骤立即持久化（AgentTaskExecutionContext 契约）：否则恢复时
+            // 未开始执行的 NODE 步无行可种子，会被 firstNonDone 跳过
+            stepRepo.saveAllIfAbsent(taskId, ctx.registeredSteps());
             eventRepo.append(event(taskId, TaskEventType.STEP_DONE, stepDetail(def)));
             if (result.resultRef() != null) {
                 resultRef.set(result.resultRef());

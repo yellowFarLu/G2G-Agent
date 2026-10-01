@@ -4,6 +4,7 @@ import com.wikiagent.domain.agent.Plan;
 import com.wikiagent.domain.agent.PlanStep;
 import com.wikiagent.domain.agent.ReActResult;
 import com.wikiagent.domain.agent.Reflection;
+import com.wikiagent.domain.task.ControlSignalException;
 import com.wikiagent.service.chat.SseSender;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -72,28 +73,57 @@ public class PeroAgent {
      * 异常向上抛出，由 {@code ChatService} 统一转 SSE error 事件。
      */
     public void run(String userId, String sessionId, String userInput, SseSender sse) {
-        String conversationId = userId + ":" + sessionId;
-
-        // === 1. PERCEIVE（感知）===
         Perception ctx = perceive(userId, sessionId, userInput);
+        Plan plan = planPhase(ctx, userId, userInput);
+        executeLoop(ctx, plan, handover, sse, PeroLoopHook.NOOP);
+        generatePhase(ctx, handover, userId, sessionId, sse);
+    }
 
-        // === 2. PLAN（一次性生成任务计划列表，Plan-and-Solve）===
+    /**
+     * Plan 阶段（感知 + 规划 + 交接清单声明），供任务框架 PLAN 步复用。
+     * <p>
+     * 返回的 {@link Plan} 为可变剩余计划：调用方如需自持副本请自行拷贝
+     * （任务框架 AgentTaskHandler 以 JSON checkpoint 形式持有，不依赖内部可变 list）。
+     */
+    public Plan runPlan(String userId, String sessionId, String userInput) {
+        Perception ctx = perceive(userId, sessionId, userInput);
+        return planPhase(ctx, userId, userInput);
+    }
+
+    private Plan planPhase(Perception ctx, String userId, String userInput) {
+        String conversationId = userId + ":" + ctx.sessionId();
         TraceSpan planSpan = trace.start(conversationId, userId, "plan", userInput);
         Plan plan = peroPlanner.plan(ctx);
-        handover.init(userId, sessionId, userInput);
+        handover.init(userId, ctx.sessionId(), userInput);
         handover.declarePlan(plan);
         trace.end(planSpan, plan.toString(), "OK", null);
         log.debug("PERO plan 生成: {} 个步骤", plan.size());
+        return plan;
+    }
 
-        // === 3-5. EXECUTE(ReAct) → REFLECT → OPTIMIZE 循环 ===
+    /**
+     * EXECUTE→REFLECT→OPTIMIZE 节点循环（v6 §20.4 步骤 3-5），供 run 与任务框架 NODE 步复用。
+     * <p>
+     * 钩子语义：节点循环顶部调 {@code hook.beforeNode}；ReAct 迭代 gate 为
+     * {@code () -> hook.afterReactIteration(step, i)}。钩子抛出的
+     * {@code ControlSignalException}（暂停/取消）先于通用 catch 重抛——
+     * 节点不 failNode、不进入失败反思/重试。
+     */
+    public void executeLoop(Perception ctx, Plan plan, Handover handover,
+                            SseSender sse, PeroLoopHook hook) {
+        String conversationId = ctx.userId() + ":" + ctx.sessionId();
+        int nodeIndex = 0;
         while (!plan.steps().isEmpty()) {
             PlanStep step = plan.steps().remove(0);
-            TraceSpan nodeSpan = trace.start(conversationId, userId, step.id(), step.goal());
+            hook.beforeNode(step, nodeIndex++);
+            TraceSpan nodeSpan = trace.start(conversationId, ctx.userId(), step.id(), step.goal());
             handover.startNode(step);
 
             try {
                 // 3. EXECUTE：节点内部用 ReAct (Thought/Action/Observation) 循环
-                ReActResult result = reactExecutor.execute(step, ctx, handover, maxIter);
+                java.util.concurrent.atomic.AtomicInteger iter = new java.util.concurrent.atomic.AtomicInteger();
+                ReActResult result = reactExecutor.execute(step, ctx, handover, maxIter,
+                        () -> hook.afterReactIteration(step, iter.incrementAndGet()));
                 handover.completeNode(step, result);
 
                 // 4. REFLECT：让 LLM 复盘节点结果（Reflexion 论文 §20.2 #3）
@@ -108,6 +138,9 @@ public class PeroAgent {
                 }
                 trace.end(nodeSpan, result.toString(), result.done() ? "OK" : "TRUNCATED", null);
                 plan = optimizer.optimize(plan, reflection);
+            } catch (ControlSignalException c) {
+                // 暂停/取消：原样穿出，节点不 failNode（Task 12 冻结语义）
+                throw c;
             } catch (Exception e) {
                 handover.failNode(step, e.getMessage());
                 trace.end(nodeSpan, null, "ERROR", e.getMessage());
@@ -123,12 +156,21 @@ public class PeroAgent {
                 }
             }
         }
+    }
 
-        // === 6. GENERATE ===
+    /**
+     * GENERATE 阶段：汇总节点产物生成最终答案 + 交接清单持久化 + SSE 推送，
+     * 供 run 与任务框架 GENERATE 步复用。
+     *
+     * @return 最终答案文本
+     */
+    public String generatePhase(Perception ctx, Handover handover,
+                                String userId, String sessionId, SseSender sse) {
         String answer = generator.generate(ctx, handover);
         handover.persistEvent(userId, sessionId, answer);
         sse.send("delta", Map.of("text", answer));
         sse.send("done", Map.of());
+        return answer;
     }
 
     /**
@@ -137,8 +179,9 @@ public class PeroAgent {
      * v3-v5 实施时由 {@code PerceptionService.perceive()} 替换：
      * 加载用户档案（§5）+ 短期记忆（§3）+ 意图分类（§7 LLM 路由）。
      * v6 默认实现使用 {@link SimplePerception}（intent=knowledge_qa）。
+     * public 可见性供任务框架各步骤独立重建上下文（SimplePerception 构造为纯内存操作）。
      */
-    protected Perception perceive(String userId, String sessionId, String userInput) {
+    public Perception perceive(String userId, String sessionId, String userInput) {
         return new SimplePerception(userId, sessionId, userInput);
     }
 }

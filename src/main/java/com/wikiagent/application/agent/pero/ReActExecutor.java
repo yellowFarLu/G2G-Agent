@@ -66,6 +66,16 @@ public class ReActExecutor {
      * "节点 span 下挂至少 2 条子 ReAct span"。
      */
     public ReActResult execute(PlanStep step, Perception ctx, Handover handover, int maxIter) {
+        return execute(step, ctx, handover, maxIter, () -> { });
+    }
+
+    /**
+     * 带迭代 gate 的重载（Task 12）：每次迭代顶部执行 {@code iterationGate}，
+     * gate 抛出的控制信号（暂停/取消）原样穿出本方法，不得被迭代内通用 catch 吞掉。
+     * 原四参方法委托空 gate，行为不变。
+     */
+    public ReActResult execute(PlanStep step, Perception ctx, Handover handover,
+                               int maxIter, Runnable iterationGate) {
         int limit = maxIter > 0 ? maxIter : defaultMaxIter;
         List<ThoughtActionObservation> traceList = new ArrayList<>();
         List<String> allowedTools = toolRegistry.allowedTools(step);
@@ -73,6 +83,7 @@ public class ReActExecutor {
         String prompt = buildReActPrompt(step, ctx, allowedTools, traceList);
 
         for (int i = 0; i < limit; i++) {
+            iterationGate.run();
             TraceSpan sub = trace.start(conversationId, ctx.userId(),
                     "react:" + step.id() + ":" + (i + 1), step.goal());
             ReActStep ra;
