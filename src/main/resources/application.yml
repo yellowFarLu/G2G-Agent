@@ -117,6 +117,11 @@ wikiagent:
     short-term-ttl-hours: 24           # Redis TTL 24h
     handover-dir: ./data/handover      # 交接清单存储目录
     python-script: scripts/extract_field_index.py
+    # 子项目 A §5：交接清单适配器，交付后默认 mysql（file 实现保留供回退）
+    handover-adapter: ${WIKIAGENT_MEMORY_HANDOVER_ADAPTER:mysql}   # file | mysql
+    # 一次性历史文件迁移开关：开发默认 false；docker compose 初始化置 true
+    file-migration:
+      enabled: ${WIKIAGENT_MEMORY_FILE_MIGRATION_ENABLED:false}
 
   # v1-v2 §7 LLM 路由
   routing:
@@ -215,6 +220,30 @@ wikiagent:
     state-reducer:
       default: overwrite
       list-keys: [messages, episodic_memory]
+
+  # ============================================================
+  # 子项目 A §6 任务框架（MySQL 状态机 + MQ 投递 + Redis 协调）
+  # 框架默认开启 + mq=local：JVM 本地调度，开发环境零外部中间件；
+  # docker compose / 生产通过 TASK_MQ=rocketmq 切换 RocketMQ。
+  # ============================================================
+  task:
+    enabled: ${WIKIAGENT_TASK_ENABLED:true}
+    mq: ${TASK_MQ:local}                # local | rocketmq
+    concurrency:
+      ingest: 2                         # cg-task-ingest 消费并发
+      agent: 4                          # cg-task-agent 消费并发
+    lease-ttl-sec: 30                   # Worker 租约 TTL
+    heartbeat-sec: 10                   # 心跳续租间隔
+    recovery-scan-sec: 15               # 崩溃租约回收扫描周期
+    dispatch-retry-scan-sec: 5          # PENDING 滞留补偿扫描周期
+    tenant-max-concurrent: 0            # 同租户并发上限，0 表示不限
+    defaults:
+      max-attempts: 3
+      step-timeout-sec: 300
+      agent-step-timeout-sec: 180
+      deadline-sec: 1800
+    backoff: [10s, 30s, 2m]            # 指数退避（RocketMQ 延迟等级 3/4/6）
+
   ingest:
     parent-chars: 1000
     parent-overlap: 150

@@ -25,6 +25,10 @@
         <pdfbox.version>3.0.8</pdfbox.version>
         <poi-ooxml.version>5.5.1</poi-ooxml.version>
         <redisson.version>3.45.0</redisson.version>
+        <!-- 子项目 A：RocketMQ 经典 Remoting 客户端（避开 rocketmq-spring-starter 的 javax 兼容问题） -->
+        <rocketmq.version>5.3.1</rocketmq.version>
+        <!-- CI 集成测试：Testcontainers（MySQL/Redis/RocketMQ） -->
+        <testcontainers.version>1.20.4</testcontainers.version>
     </properties>
 
     <dependencyManagement>
@@ -40,6 +44,14 @@
                 <groupId>org.springframework.ai</groupId>
                 <artifactId>spring-ai-bom</artifactId>
                 <version>${spring-ai.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+            <!-- 子项目 A：Testcontainers BOM 统一版本（CI 集成测试） -->
+            <dependency>
+                <groupId>org.testcontainers</groupId>
+                <artifactId>testcontainers-bom</artifactId>
+                <version>${testcontainers.version}</version>
                 <type>pom</type>
                 <scope>import</scope>
             </dependency>
@@ -70,6 +82,13 @@
             <groupId>org.redisson</groupId>
             <artifactId>redisson-spring-boot-starter</artifactId>
             <version>${redisson.version}</version>
+        </dependency>
+
+        <!-- 子项目 A §1.4 RocketMQ 任务投递（经典 Remoting 客户端 5.3.1） -->
+        <dependency>
+            <groupId>org.apache.rocketmq</groupId>
+            <artifactId>rocketmq-client</artifactId>
+            <version>${rocketmq.version}</version>
         </dependency>
 
         <!-- Spring AI Alibaba: DashScope Chat + Embedding（v6 验证：1.1.2.0 BOM 含本 starter） -->
@@ -161,6 +180,18 @@
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+
+        <!-- 子项目 A：Testcontainers（CI 起 MySQL/Redis/RocketMQ 真实容器做集成测试） -->
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>junit-jupiter</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>mysql</artifactId>
             <scope>test</scope>
         </dependency>
     </dependencies>

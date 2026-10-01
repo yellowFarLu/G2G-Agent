@@ -100,6 +100,38 @@ services:
       - "5051:5051"
 
   # ============================================================
+  # RocketMQ NameServer（子项目 A §1.4 任务投递：单 Topic + Tag）
+  # ============================================================
+  rmqnamesrv:
+    image: apache/rocketmq:5.3.1
+    container_name: wikiagent-rmqnamesrv
+    command: sh mqnamesrv
+    ports:
+      - "9876:9876"
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c 'exec 3<>/dev/tcp/localhost/9876'"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ============================================================
+  # RocketMQ Broker（5.x 合并部署：broker + proxy 同进程）
+  # 8080/8081：proxy 端口；依赖 NameServer healthy 后启动
+  # ============================================================
+  rmqbroker:
+    image: apache/rocketmq:5.3.1
+    container_name: wikiagent-rmqbroker
+    command: sh mqbroker -n rmqnamesrv:9876 --enable-proxy
+    environment:
+      NAMESRV_ADDR: rmqnamesrv:9876
+    ports:
+      - "8080:8080"
+      - "8081:8081"
+    depends_on:
+      rmqnamesrv:
+        condition: service_healthy
+
+  # ============================================================
   # Nginx 接入层（v4 §16 分级架构 - sticky session by X-User-Id）
   # ============================================================
   nginx:
@@ -124,6 +156,8 @@ services:
         condition: service_healthy
       milvus:
         condition: service_started
+      rmqbroker:
+        condition: service_started
     environment:
       MYSQL_URL: jdbc:mysql://mysql:3306/${MYSQL_DB:-wikiagent}
       MYSQL_DRIVER: com.mysql.cj.jdbc.Driver
@@ -136,6 +170,12 @@ services:
       HIBERNATE_DIALECT: org.hibernate.dialect.MySQLDialect
       SESSION_STORE: redis
       WIKIAGENT_SESSION_REDIS: "true"
+      # 子项目 A：任务框架切 RocketMQ，交接清单走 MySQL 并执行一次性文件迁移
+      TASK_MQ: rocketmq
+      ROCKETMQ_NAME_SERVER: rmqnamesrv:9876
+      WIKIAGENT_TASK_ENABLED: "true"
+      WIKIAGENT_MEMORY_HANDOVER_ADAPTER: mysql
+      WIKIAGENT_MEMORY_FILE_MIGRATION_ENABLED: "true"
     ports:
       - "8081:8080"
 
@@ -150,6 +190,8 @@ services:
         condition: service_healthy
       milvus:
         condition: service_started
+      rmqbroker:
+        condition: service_started
     environment:
       MYSQL_URL: jdbc:mysql://mysql:3306/${MYSQL_DB:-wikiagent}
       MYSQL_DRIVER: com.mysql.cj.jdbc.Driver
@@ -162,6 +204,12 @@ services:
       HIBERNATE_DIALECT: org.hibernate.dialect.MySQLDialect
       SESSION_STORE: redis
       WIKIAGENT_SESSION_REDIS: "true"
+      # 子项目 A：任务框架切 RocketMQ，交接清单走 MySQL 并执行一次性文件迁移
+      TASK_MQ: rocketmq
+      ROCKETMQ_NAME_SERVER: rmqnamesrv:9876
+      WIKIAGENT_TASK_ENABLED: "true"
+      WIKIAGENT_MEMORY_HANDOVER_ADAPTER: mysql
+      WIKIAGENT_MEMORY_FILE_MIGRATION_ENABLED: "true"
     ports:
       - "8082:8080"
 
