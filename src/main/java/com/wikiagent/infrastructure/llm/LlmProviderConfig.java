@@ -45,9 +45,11 @@ public class LlmProviderConfig {
 
     @Bean
     public DashScopeRerankProvider dashScopeRerankProvider(
+            @Value("${spring.ai.dashscope.api-key:}") String apiKey,
             @Value("${wikiagent.rerank.model:gte-rerank}") String rerankModel,
-            @Value("${wikiagent.rerank.enabled:false}") boolean rerankEnabled) {
-        // 首批适配位：默认不可用（enabled=false），RetrievalService 对不可用 provider 原序放行
-        return new DashScopeRerankProvider(rerankModel, rerankEnabled);
+            @Value("${wikiagent.rerank.enabled:false}") boolean rerankEnabled,
+            @Value("${wikiagent.rerank.base-url:" + DashScopeRerankProvider.DEFAULT_BASE_URL + "}") String baseUrl) {
+        // 默认 enabled=false 或 API Key 缺失 → available()=false，RetrievalService 原序放行
+        return new DashScopeRerankProvider(apiKey, rerankEnabled, baseUrl, rerankModel);
     }
 }

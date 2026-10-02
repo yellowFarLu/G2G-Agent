@@ -1,6 +1,8 @@
 package com.wikiagent.service.retrieve;
 
+import com.wikiagent.application.llm.ModelCallRecorder;
 import com.wikiagent.config.WikiAgentProperties;
+import com.wikiagent.domain.llm.ModelCallLogPurpose;
 import com.wikiagent.domain.llm.spi.RerankProvider;
 import com.wikiagent.domain.llm.spi.RerankRequest;
 import com.wikiagent.domain.llm.spi.RerankResult;
@@ -83,6 +85,8 @@ public class RetrievalService {
     private final KnowledgeMetadataJpaDao metadataDao;
     /** E5：是否把权限表达式下推 Milvus（存量集合缺标量列时须保持 false）。 */
     private final boolean milvusFilterMetadata;
+    /** E3：RERANK 打点器（可选，缺失时只重排不打点）。 */
+    private final ModelCallRecorder callRecorder;
 
     /** Milvus 不可用截止时间戳；0 表示正常，>now 表示冷却降级中。 */
     private volatile long milvusDisabledUntil = 0L;
@@ -94,6 +98,22 @@ public class RetrievalService {
         this(props, milvus, embeddingModel, parentRepo, docRepo, childRepo, metricEventDao, null, null, false);
     }
 
+    /** E5 构造（兼容）：无 RERANK 打点器。 */
+    public RetrievalService(WikiAgentProperties props, MilvusStoreService milvus, EmbeddingModel embeddingModel,
+                            KbParentChunkRepo parentRepo, KbDocumentRepo docRepo, KbChildChunkRepo childRepo,
+                            MetricEventJpaDao metricEventDao,
+                            org.springframework.beans.factory.ObjectProvider<RerankProvider> rerankProvider,
+                            org.springframework.beans.factory.ObjectProvider<KnowledgeMetadataJpaDao> metadataDao,
+                            boolean milvusFilterMetadata) {
+        this(props, milvus, embeddingModel, parentRepo, docRepo, childRepo, metricEventDao,
+                rerankProvider, metadataDao, milvusFilterMetadata, null);
+    }
+
+    /**
+     * E2/E3/E5 全量装配构造。
+     *
+     * @param callRecorder RERANK 打点器（ObjectProvider 可选；无 Bean 时不打点）
+     */
     @org.springframework.beans.factory.annotation.Autowired
     public RetrievalService(WikiAgentProperties props, MilvusStoreService milvus, EmbeddingModel embeddingModel,
                             KbParentChunkRepo parentRepo, KbDocumentRepo docRepo, KbChildChunkRepo childRepo,
@@ -101,7 +121,8 @@ public class RetrievalService {
                             org.springframework.beans.factory.ObjectProvider<RerankProvider> rerankProvider,
                             org.springframework.beans.factory.ObjectProvider<KnowledgeMetadataJpaDao> metadataDao,
                             @org.springframework.beans.factory.annotation.Value(
-                                    "${wikiagent.milvus.filter-metadata:false}") boolean milvusFilterMetadata) {
+                                    "${wikiagent.milvus.filter-metadata:false}") boolean milvusFilterMetadata,
+                            org.springframework.beans.factory.ObjectProvider<ModelCallRecorder> callRecorder) {
         this.props = props;
         this.milvus = milvus;
         this.embeddingModel = embeddingModel;
@@ -113,6 +134,7 @@ public class RetrievalService {
         this.rerankProvider = rp != null && rp.available() ? rp : null;
         this.metadataDao = metadataDao == null ? null : metadataDao.getIfAvailable();
         this.milvusFilterMetadata = milvusFilterMetadata;
+        this.callRecorder = callRecorder == null ? null : callRecorder.getIfAvailable();
     }
 
     /** 单次多查询检索（一次组装，rerank 可用时重排）。 */
@@ -365,11 +387,17 @@ public class RetrievalService {
     /**
      * E2 rerank：可用时对候选父块按 rerank 分数重排 parentOrder。
      * 候选父块内容缺失时跳过；任何异常不阻断，保持原顺序。
+     * E3：实际调用 provider 时写 purpose=RERANK 的 model_call_log（成功/失败各一行）；
+     * rerank 未启用/不可用时本方法直接返回——没调就不写日志（诚实打点）。
      */
     private void maybeRerank(Accumulator acc, String query) {
         if (rerankProvider == null || query == null || query.isBlank() || acc.parentOrder.size() < 2) {
             return;
         }
+        String provider = "dashscope";
+        String model = rerankProvider instanceof com.wikiagent.infrastructure.llm.DashScopeRerankProvider d
+                ? d.model() : rerankProvider.name();
+        long started = System.currentTimeMillis();
         try {
             List<String> parentIds = new ArrayList<>(acc.parentOrder);
             Map<String, KbParentChunk> parents = new HashMap<>();
@@ -391,6 +419,7 @@ public class RetrievalService {
             if (rr == null || rr.scores() == null || rr.scores().size() != docs.size()) {
                 return;
             }
+            recordRerank(provider, model, System.currentTimeMillis() - started, true);
             List<String> reordered = new ArrayList<>(validIds);
             List<Double> scores = rr.scores();
             // 按分数降序稳定重排
@@ -406,7 +435,16 @@ public class RetrievalService {
                 acc.bestScore.put(validIds.get(i), scores.get(i));
             }
         } catch (Exception e) {
+            recordRerank(provider, model, System.currentTimeMillis() - started, false);
             log.warn("rerank 失败，保持原序: {}", e.getMessage());
+        }
+    }
+
+    /** E3：RERANK 打点；callRecorder 缺失（旧装配/单测）时静默跳过。 */
+    private void recordRerank(String provider, String model, long latencyMs, boolean success) {
+        if (callRecorder != null) {
+            callRecorder.record(ModelCallLogPurpose.RERANK, provider, model,
+                    null, null, latencyMs, success, null, null, null);
         }
     }
 

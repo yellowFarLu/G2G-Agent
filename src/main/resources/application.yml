@@ -305,6 +305,7 @@ wikiagent:
   rerank:
     enabled: ${WIKIAGENT_RERANK_ENABLED:false}   # DashScope rerank 首批适配位，默认关闭
     model: gte-rerank
+    base-url: ${WIKIAGENT_RERANK_BASE_URL:https://dashscope.aliyuncs.com/api/v1/services/rerank/text-rerank/text-rerank}
   cache:
     embedding:
       enabled: ${WIKIAGENT_CACHE_EMBEDDING_ENABLED:true}
