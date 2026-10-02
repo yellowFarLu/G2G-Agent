@@ -10,58 +10,58 @@
 ## 波次 1：B 解析流水线 + C 血缘版本（最高优先级）
 
 ### B-1 SPI 与 Provider 基础设施
-- [ ] B1.1 `domain/parse/spi`：DocumentAiProvider 接口 + Capability + 请求/结果记录（OcrResult 含 bbox/confidence，TranscriptResult 含时间轴，LayoutResult 有序块，TableResult 矩阵）
-- [ ] B1.2 ProviderRegistry（按能力选 provider、wikiagent.parse.provider 配置、none 实现、available 探测）
-- [ ] B1.3 统一调用策略：超时/2 次指数退避/60s 熔断（独立 circuit state，仿 Milvus 模式）+ ParseProviderException 异常分层
-- [ ] B1.4 DashScopeProvider 实现（qwen-vl OCR/版面/表格 + 语音文件转写）；无 key 时 available=false（不阻断上下文启动）
-- TR：SPI 契约测试（fake provider 注册/选择/熔断/降级）；DashScope 走 WireMock 风格桩（不真实联网）
+- [x] B1.1 `domain/parse/spi`：DocumentAiProvider 接口 + Capability + 请求/结果记录（OcrResult 含 bbox/confidence，TranscriptResult 含时间轴，LayoutResult 有序块，TableResult 矩阵）
+- [x] B1.2 ProviderRegistry（按能力选 provider、wikiagent.parse.provider 配置、none 实现、available 探测）
+- [x] B1.3 统一调用策略：超时/2 次指数退避/60s 熔断（独立 circuit state，仿 Milvus 模式）+ ParseProviderException 异常分层
+- [x] B1.4 DashScopeProvider 实现（qwen-vl OCR/版面/表格 + 语音文件转写）；无 key 时 available=false（不阻断上下文启动）
+- [x] TR：SPI 契约测试（fake provider 注册/选择/熔断/降级）；DashScope 走 WireMock 风格桩（不真实联网）
 
 ### B-2 格式与异常覆盖
-- [ ] B2.1 引入 Apache Tika 兜底 .doc/.xls（纯 Java）；DocumentParser 重构为「原生解析器优先+Tika 兜底」
-- [ ] B2.2 图片格式（png/jpg/tiff）→ OCR 路径；扫描件 PDF 检测（页文本为空/极少 → 整页 OCR）
-- [ ] B2.3 音频（mp3/wav/m4a）→ ASR 路径（转录文本+时间轴 artifact）
-- [ ] B2.4 加密 PDF：检测 → HumanRequiredException(DECRYPT, 需要口令) → 口令续跑（错误口令可重试 3 次）
-- [ ] B2.5 损坏文件/超大文件：明确 PARSE_FAILED 不重试；超大按页流式（上限 wikiagent.parse.max-file-mb 默认 200）
-- TR：每类格式一个固定样本（src/test/resources/fixtures/parse/，音频用 1-2s 静音短固件）；加密/损坏用 PDFBox 测试生成
+- [x] B2.1 引入 Apache Tika 兜底 .doc/.xls（纯 Java）；DocumentParser 重构为「原生解析器优先+Tika 兜底」
+- [x] B2.2 图片格式（png/jpg/tiff）→ OCR 路径；扫描件 PDF 检测（页文本为空/极少 → 整页 OCR）
+- [x] B2.3 音频（mp3/wav/m4a）→ ASR 路径（转录文本+时间轴 artifact）
+- [x] B2.4 加密 PDF：检测 → HumanRequiredException(DECRYPT, 需要口令) → 口令续跑（错误口令可重试 3 次）
+- [x] B2.5 损坏文件/超大文件：明确 PARSE_FAILED 不重试；超大按页流式（上限 wikiagent.parse.max-file-mb 默认 200）
+- [x] TR：每类格式一个固定样本（src/test/resources/fixtures/parse/，音频用 1-2s 静音短固件）；加密/损坏用 PDFBox 测试生成
 
 ### B-3 版面/表格/冲突
-- [ ] B3.1 PageBlock 模型（pageNo/bbox/order/type）落 artifact（B 写、C 表在 B-6）
-- [ ] B3.2 跨页表格拼接（同名表头续接判定+STITCHED edge+歧义 CONFLICT 标记）
-- [ ] B3.3 文本层 vs OCR 差异率检测 → CONFLICT artifact
-- TR：跨页表格合成 PDF 样本断言行数连续；差异样例断言 CONFLICT
+- [x] B3.1 PageBlock 模型（pageNo/bbox/order/type）落 artifact（B 写、C 表在 B-6）
+- [x] B3.2 跨页表格拼接（同名表头续接判定+STITCHED edge+歧义 CONFLICT 标记）
+- [x] B3.3 文本层 vs OCR 差异率检测 → CONFLICT artifact
+- [x] TR：跨页表格合成 PDF 样本断言行数连续；差异样例断言 CONFLICT
 
 ### B-4 结构化字段提取
-- [ ] B4.1 域 ExtractionSchema 注册表（JSON Schema：required/type/regex/enum，先落 1 个示例域 schema）
-- [ ] B4.2 LLM 结构化提取（ChatModel + JSON schema 输出+修复重试 1 次），产出 ExtractedField(confidence/evidence)
-- [ ] B4.3 字段校验器 + 低置信/校验失败 → HumanRequiredException(REVIEW)（阈值可配）
-- TR：用录制的 LLM 响应固件断言字段映射、校验失败转人工、置信度透传
+- [x] B4.1 域 ExtractionSchema 注册表（JSON Schema：required/type/regex/enum，先落 1 个示例域 schema）
+- [x] B4.2 LLM 结构化提取（ChatModel + JSON schema 输出+修复重试 1 次），产出 ExtractedField(confidence/evidence)
+- [x] B4.3 字段校验器 + 低置信/校验失败 → HumanRequiredException(REVIEW)（阈值可配）
+- [x] TR：用录制的 LLM 响应固件断言字段映射、校验失败转人工、置信度透传
 
 ### B-5 INGEST 流水线扩展（不破坏 A 契约）
-- [ ] B5.1 planSteps 按文件类型条件化（TEXT 六步 / OCR+LAYOUT+EXTRACT / ASR+EXTRACT），动态步骤注册沿用 AgentTaskHandler 模式（大编号段 100+）
-- [ ] B5.2 每步 checkpoint 幂等（artifact 已存在跳过、field 唯一约束、CONFLICT 不阻断 READY）
-- [ ] B5.3 文档状态扩展（KbDocument 增 EXTRACTING/AI_SKIPPED 可选态，旧状态不变）
-- TR：TaskWorker 集成测试覆盖三条分流 + 断点重跑不重复；既有 IngestTaskHandlerTest 零回归
+- [x] B5.1 planSteps 按文件类型条件化（TEXT 六步 / OCR+LAYOUT+EXTRACT / ASR+EXTRACT），动态步骤注册沿用 AgentTaskHandler 模式（大编号段 100+）
+- [x] B5.2 每步 checkpoint 幂等（artifact 已存在跳过、field 唯一约束、CONFLICT 不阻断 READY）
+- [x] B5.3 文档状态扩展（KbDocument 增 EXTRACTING/AI_SKIPPED 可选态，旧状态不变）
+- [x] TR：TaskWorker 集成测试覆盖三条分流 + 断点重跑不重复；既有 IngestTaskHandlerTest 零回归
 
 ### C-1 血缘与版本数据模型（V10）
-- [ ] C1.1 V10 迁移：doc_artifact / provenance_edge / extracted_field / field_version / doc_version（唯一约束、索引、外键软关联）
-- [ ] C1.2 domain 模型 + JPA 实体/DAO；ArtifactStore（派生文件落 `data/uploads/{docId}/artifacts/`，sha256 校验）
-- [ ] C1.3 ProvenanceService（写 edge、版本递增、SUPERSEDES 链）
-- TR：V10 在 H2 MODE=MySQL 集成测试真实执行；版本链/唯一约束测试
+- [x] C1.1 V10 迁移：doc_artifact / provenance_edge / extracted_field / field_version / doc_version（唯一约束、索引、外键软关联）
+- [x] C1.2 domain 模型 + JPA 实体/DAO；ArtifactStore（派生文件落 `data/uploads/{docId}/artifacts/`，sha256 校验）
+- [x] C1.3 ProvenanceService（写 edge、版本递增、SUPERSEDES 链）
+- [x] TR：V10 在 H2 MODE=MySQL 集成测试真实执行；版本链/唯一约束测试
 
 ### C-2 产线接线与 chunk 溯源
-- [ ] C2.1 B 各步骤写 edge（DERIVED/EXTRACTED/STITCHED）；D 预留 RULED 常量
-- [ ] C2.2 knowledge_metadata 与 Milvus metadata_json 扩展 versionNo/pageNo/snippet/artifactId（回填默认值，旧数据不破坏）
-- [ ] C2.3 重解析新版本：旧 chunk is_active=false + doc_version 行；检索默认仅 ACTIVE
-- TR：IT 断言 chunk→docId/pageNo/snippet 可解析；重解析两版本隔离
+- [x] C2.1 B 各步骤写 edge（DERIVED/EXTRACTED/STITCHED）；D 预留 RULED 常量
+- [x] C2.2 knowledge_metadata 与 Milvus metadata_json 扩展 versionNo/pageNo/snippet/artifactId（回填默认值，旧数据不破坏）
+- [x] C2.3 重解析新版本：旧 chunk is_active=false + doc_version 行；检索默认仅 ACTIVE
+- [x] TR：IT 断言 chunk→docId/pageNo/snippet 可解析；重解析两版本隔离
 
 ### C-3 血缘/版本 API
-- [ ] C3.1 `GET /api/documents/{docId}/lineage`（产物树+edge）
-- [ ] C3.2 `GET /api/documents/{docId}/fields/{key}/lineage`（字段完整链）
-- [ ] C3.3 `GET /api/documents/{docId}/versions` + `…/versions/{a}/diff/{b}` 字段级 diff
-- TR：MockMvc 集成测试（3 版本 diff 增删改全覆盖）
+- [x] C3.1 `GET /api/documents/{docId}/lineage`（产物树+edge）
+- [x] C3.2 `GET /api/documents/{docId}/fields/{key}/lineage`（字段完整链）
+- [x] C3.3 `GET /api/documents/{docId}/versions` + `…/versions/{a}/diff/{b}` 字段级 diff
+- [x] TR：MockMvc 集成测试（3 版本 diff 增删改全覆盖）
 
 ### 波 1 闸门
-- 全量 `mvn test` 绿（基线 341+新增）、light verify 通过 → fresh review（对照 AC-B1..B6、AC-C1..C4）→ 修订 → 提交波次总结 → 更新手工执行清单
+- [x] 全量 `mvn test` 绿（424 项，含新增 42 项）、light verify 通过 → fresh review（对照 AC-B1..B6、AC-C1..C4）→ 修订（6 项缺陷修复）→ 提交波次总结（commit b39c5c9）
 
 ---
 
