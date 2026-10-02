@@ -25,6 +25,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
@@ -91,10 +92,10 @@ class AgentRagServiceTest {
         service.run("u1", "s1", "你好，你是谁？", sse);
 
         verifyNoInteractions(retrieval, rewriter);
-        verify(streamer, times(1)).stream(any(Prompt.class), eq(sse));
+        verify(streamer, times(1)).stream(any(Prompt.class), eq(sse), isNull(), eq("u1"), eq("s1"));
         // 捕获 direct 回答的 system 提示词
         ArgumentCaptor<Prompt> captor = ArgumentCaptor.forClass(Prompt.class);
-        verify(streamer).stream(captor.capture(), eq(sse));
+        verify(streamer).stream(captor.capture(), eq(sse), isNull(), eq("u1"), eq("s1"));
         assertTrue(captor.getValue().getInstructions().stream()
                 .anyMatch(m -> m.getText() != null && m.getText().contains("问候")), "应使用 direct 模式提示词");
     }
@@ -106,7 +107,7 @@ class AgentRagServiceTest {
         service.run("u1", "s1", "今天天气如何？", sse);
 
         verifyNoInteractions(retrieval, rewriter);
-        verify(streamer, never()).stream(any(Prompt.class), eq(sse));
+        verify(streamer, never()).stream(any(Prompt.class), eq(sse), any(), any(), any());
         // 实时问题 → 直接走联网兜底（enable_search）
         verify(fallback, times(1)).answer(eq("今天天气如何？"), eq(sse));
     }
@@ -124,7 +125,7 @@ class AgentRagServiceTest {
         assertEquals(List.of("报销时限", "差旅标准"), queriesCaptor.getValue());
         // 证据充分 → 规划 + 第 1 轮评估（maxRounds=2，最后一轮才跳过评估）
         verify(chatModel, times(2)).call(any(Prompt.class));
-        verify(streamer, times(1)).stream(any(Prompt.class), eq(sse));
+        verify(streamer, times(1)).stream(any(Prompt.class), eq(sse), isNull(), eq("u1"), eq("s1"));
     }
 
     @Test
@@ -144,7 +145,7 @@ class AgentRagServiceTest {
         assertEquals(List.of("q2 更好"), queriesCaptor.getAllValues().get(1));
         // 规划 + 第 1 轮评估（不足）+ 第 2 轮（末轮）评估（充分）= 3 次
         verify(chatModel, times(3)).call(any(Prompt.class));
-        verify(streamer, times(1)).stream(any(Prompt.class), eq(sse));
+        verify(streamer, times(1)).stream(any(Prompt.class), eq(sse), isNull(), eq("u1"), eq("s1"));
     }
 
     @Test
@@ -161,7 +162,7 @@ class AgentRagServiceTest {
         verify(retrieval, times(1)).search(any(), anyList());
         // 规划 + 末轮评估 = 2 次（末轮评估用于弱命中兜底判定）
         verify(chatModel, times(2)).call(any(Prompt.class));
-        verify(streamer, times(1)).stream(any(Prompt.class), eq(sse));
+        verify(streamer, times(1)).stream(any(Prompt.class), eq(sse), isNull(), eq("u1"), eq("s1"));
     }
 
     @Test
@@ -175,7 +176,7 @@ class AgentRagServiceTest {
         ArgumentCaptor<List<String>> queriesCaptor = ArgumentCaptor.forClass(List.class);
         verify(retrieval, times(1)).search(any(RetrievalService.Accumulator.class), queriesCaptor.capture());
         assertEquals(List.of("原始问题"), queriesCaptor.getValue());
-        verify(streamer, times(1)).stream(any(Prompt.class), eq(sse));
+        verify(streamer, times(1)).stream(any(Prompt.class), eq(sse), isNull(), eq("u1"), eq("s1"));
     }
 
     @Test
@@ -191,7 +192,7 @@ class AgentRagServiceTest {
         ArgumentCaptor<List<String>> queriesCaptor = ArgumentCaptor.forClass(List.class);
         verify(retrieval, times(2)).search(any(RetrievalService.Accumulator.class), queriesCaptor.capture());
         assertEquals(List.of("改写后的问题"), queriesCaptor.getAllValues().get(1));
-        verify(streamer, never()).stream(any(Prompt.class), eq(sse));
+        verify(streamer, never()).stream(any(Prompt.class), eq(sse), any(), any(), any());
         // 两轮均无证据 → 交给未命中兜底（联网搜索 / 模型自身知识）
         verify(fallback, times(1)).answer(eq("问题"), eq(sse));
     }
@@ -209,7 +210,7 @@ class AgentRagServiceTest {
 
         service.run("u1", "s1", "公司年假制度是怎样的？", sse);
 
-        verify(streamer, never()).stream(any(Prompt.class), eq(sse));
+        verify(streamer, never()).stream(any(Prompt.class), eq(sse), any(), any(), any());
         verify(fallback, times(1)).answer(eq("公司年假制度是怎样的？"), eq(sse));
     }
 
@@ -221,7 +222,7 @@ class AgentRagServiceTest {
         service.run("u1", "s1", "问题", sse);
 
         ArgumentCaptor<Prompt> captor = ArgumentCaptor.forClass(Prompt.class);
-        verify(streamer).stream(captor.capture(), eq(sse));
+        verify(streamer).stream(captor.capture(), eq(sse), isNull(), eq("u1"), eq("s1"));
         String joined = captor.getValue().getInstructions().stream()
                 .map(m -> m.getText() == null ? "" : m.getText())
                 .reduce("", String::concat);

@@ -43,6 +43,22 @@ public class LlmProviderConfig {
         return chain;
     }
 
+    /**
+     * 流式聊天降级链：候选为所有 {@link StreamingChatModelCandidate} Bean
+     * （DashScope 适配同时实现同步 SPI 与流式接口），末端追加 NoOp 空流兜底。
+     */
+    @Bean
+    public StreamingChatChain streamingChatChain(
+            List<StreamingChatModelCandidate> streamCandidates,
+            @Value("${wikiagent.routing.simple-model:qwen-plus}") String simpleModel,
+            ModelCallRecorder recorder) {
+        List<StreamingChatModelCandidate> candidates = new ArrayList<>(streamCandidates);
+        candidates.add(new NoOpChatModelProvider(simpleModel)); // 降级末端：空 Flux 不抛异常
+        StreamingChatChain chain = new StreamingChatChain(candidates);
+        chain.setRecorder(recorder);
+        return chain;
+    }
+
     @Bean
     public DashScopeRerankProvider dashScopeRerankProvider(
             @Value("${spring.ai.dashscope.api-key:}") String apiKey,

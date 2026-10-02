@@ -9,7 +9,9 @@ import org.springframework.ai.chat.messages.SystemMessage;
 import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.ai.chat.metadata.Usage;
 import org.springframework.ai.chat.model.ChatModel;
+import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.chat.prompt.Prompt;
+import reactor.core.publisher.Flux;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -21,7 +23,7 @@ import java.util.List;
  * 底层为 NoOpChatModel（API Key 缺失）时 {@link #available()} 返回 false，
  * 由 {@link ChatModelProviderChain} 降级到后续候选。
  */
-public class DashScopeChatModelProvider implements ChatModelProvider {
+public class DashScopeChatModelProvider implements ChatModelProvider, StreamingChatModelCandidate {
 
     private static final Logger log = LoggerFactory.getLogger(DashScopeChatModelProvider.class);
 
@@ -77,7 +79,13 @@ public class DashScopeChatModelProvider implements ChatModelProvider {
     }
 
     /** 实际模型名（用于打点）。 */
+    @Override
     public String model() {
         return model;
+    }
+
+    @Override
+    public Flux<ChatResponse> stream(Prompt prompt) {
+        return chatModel.stream(prompt);
     }
 }

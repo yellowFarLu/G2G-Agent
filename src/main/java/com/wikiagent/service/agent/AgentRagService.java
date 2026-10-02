@@ -4,7 +4,9 @@ import com.wikiagent.application.llm.ModelCallRecorder;
 import com.wikiagent.application.prompt.PromptTemplateService;
 import com.wikiagent.config.WikiAgentProperties;
 import com.wikiagent.domain.llm.ModelCallLogPurpose;
+import com.wikiagent.domain.llm.spi.ChatModelRequest;
 import com.wikiagent.domain.prompt.RenderedPrompt;
+import com.wikiagent.infrastructure.llm.ChatModelProviderChain;
 import com.wikiagent.infrastructure.trace.RagTraceRecorder;
 import com.wikiagent.service.chat.ChatStreamer;
 import com.wikiagent.service.chat.FallbackAnswerService;
@@ -86,8 +88,13 @@ public class AgentRagService {
     private final PromptTemplateService templateService;
     /** 打点用模型名（chatModel 是 Primary simpleChatModel）。 */
     private final String chatModelName;
+    /**
+     * 缺陷1：同步模型调用降级链（可选）。存在时 plan/grade 等非流式调用走链，
+     * 由链负责候选切换与 model_call_log（含 fallbackFrom）；缺失时回退裸 chatModel。
+     */
+    private final ChatModelProviderChain chatChain;
 
-    /** 兼容旧构造（既有测试）：不打点、不用模板。 */
+    /** 兼容旧构造（既有测试）：不打点、不用模板、不走降级链。 */
     public AgentRagService(WikiAgentProperties props, ChatModel chatModel, RetrievalService retrieval,
                            QueryRewriteService rewriter, ChatStreamer streamer,
                            FallbackAnswerService fallback, RagTraceRecorder traceRecorder) {
@@ -95,13 +102,29 @@ public class AgentRagService {
                 "qwen-plus");
     }
 
-    @org.springframework.beans.factory.annotation.Autowired
+    /** E1/E4 构造（兼容）：无同步降级链。 */
     public AgentRagService(WikiAgentProperties props, ChatModel chatModel, RetrievalService retrieval,
                            QueryRewriteService rewriter, ChatStreamer streamer,
                            FallbackAnswerService fallback, RagTraceRecorder traceRecorder,
                            ObjectProvider<ModelCallRecorder> callRecorder,
                            ObjectProvider<PromptTemplateService> templateService,
                            @Value("${wikiagent.routing.simple-model:qwen-plus}") String chatModelName) {
+        this(props, chatModel, retrieval, rewriter, streamer, fallback, traceRecorder,
+                callRecorder, templateService, chatModelName, null);
+    }
+
+    /**
+     * 缺陷1 全量装配构造：新增可选 {@link ChatModelProviderChain}（ObjectProvider 包装，
+     * 无 Bean 时回退裸 chatModel 路径）。
+     */
+    @org.springframework.beans.factory.annotation.Autowired
+    public AgentRagService(WikiAgentProperties props, ChatModel chatModel, RetrievalService retrieval,
+                           QueryRewriteService rewriter, ChatStreamer streamer,
+                           FallbackAnswerService fallback, RagTraceRecorder traceRecorder,
+                           ObjectProvider<ModelCallRecorder> callRecorder,
+                           ObjectProvider<PromptTemplateService> templateService,
+                           @Value("${wikiagent.routing.simple-model:qwen-plus}") String chatModelName,
+                           ObjectProvider<ChatModelProviderChain> chatChain) {
         this.props = props;
         this.chatModel = chatModel;
         this.retrieval = retrieval;
@@ -112,6 +135,7 @@ public class AgentRagService {
         this.callRecorder = callRecorder == null ? null : callRecorder.getIfAvailable();
         this.templateService = templateService == null ? null : templateService.getIfAvailable();
         this.chatModelName = chatModelName;
+        this.chatChain = chatChain == null ? null : chatChain.getIfAvailable();
     }
 
     /** 路由+规划的决策结果。 */
@@ -136,7 +160,7 @@ public class AgentRagService {
             sse.send("stage", Map.of("stage", "generating", "mode", "direct"));
             streamer.stream(new Prompt(List.of(
                     new SystemMessage(DIRECT_SYSTEM),
-                    new UserMessage(question))), sse);
+                    new UserMessage(question))), sse, null, userId, sessionId);
             return;
         }
         if ("web".equals(plan.mode())) {
@@ -219,7 +243,7 @@ public class AgentRagService {
         RenderedPrompt usr = PromptComposer.userPrompt(templateService, result.context(), question);
         streamer.stream(new Prompt(List.of(
                 new SystemMessage(sys.content()),
-                new UserMessage(usr.content()))), sse);
+                new UserMessage(usr.content()))), sse, null, userId, sessionId);
     }
 
     /** 路由+规划：LLM 调用失败或输出异常时降级为 search + 原始问题。 */
@@ -279,6 +303,13 @@ public class AgentRagService {
 
     private String call(String system, String user, ModelCallLogPurpose purpose,
                         String userId, String sessionId) {
+        // 缺陷1：降级链存在时走链（链内负责候选切换与含 fallbackFrom 的打点）；
+        // 全链不可用时链返回空文本响应（不抛异常），由上层 JSON 解析失败走既有降级。
+        if (chatChain != null) {
+            ChatModelProviderChain.ChainResult cr =
+                    chatChain.call(new ChatModelRequest(system, user), purpose, userId, sessionId);
+            return cr.response() == null ? null : cr.response().content();
+        }
         long started = System.currentTimeMillis();
         try {
             var resp = chatModel.call(new Prompt(List.of(new SystemMessage(system), new UserMessage(user))));
