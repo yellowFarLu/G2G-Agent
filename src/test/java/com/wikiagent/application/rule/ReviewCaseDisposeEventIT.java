@@ -22,6 +22,7 @@ import org.springframework.test.context.TestPropertySource;
 
 import java.time.Instant;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -89,7 +90,7 @@ class ReviewCaseDisposeEventIT {
         assertThat(afterFirst).as("动作 %s：首个案件处置后仍有 OPEN 案件，不应有 HUMAN_RESOLVE",
                 action).isEmpty();
 
-        var edited = JSON.createObjectNode().put("f2", "人工值");
+        var edited = Map.of("f2", "人工值");
         reviewCaseService.dispose(c2.id(), action,
                 action == ReviewCase.ReviewAction.EDIT ? edited : null, "reviewer-b");
 
@@ -110,9 +111,10 @@ class ReviewCaseDisposeEventIT {
         assertThat(resolvedTask.status()).isEqualTo(HumanTaskStatus.RESOLVED);
         // resolve 路径以 formValue 承载 caseId/action（detail 为 null 是现状）
         assertThat(resolvedTask.formValue()).isNotNull();
-        assertThat(resolvedTask.formValue()).contains("caseId").contains(action.name());
+        assertThat(resolvedTask.formValue().has("caseId")).isTrue();
+        assertThat(resolvedTask.formValue().path("action").asText()).isEqualTo(action.name());
         if (action == ReviewCase.ReviewAction.EDIT) {
-            assertThat(resolvedTask.formValue()).contains("editedFields");
+            assertThat(resolvedTask.formValue().has("editedFields")).isTrue();
         }
 
         assertThat(taskRepo.findByTaskId(taskId).orElseThrow().status())

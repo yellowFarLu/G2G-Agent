@@ -68,7 +68,7 @@
 ## 波次 2：D 规则引擎/复核 + E RAG 治理 + F Agent 治理
 
 ### D（AC-D1..D4）
-- [x] D1 V11 rule_set/rule_computation/review_case 表；规则版本生命周期（DRAFT/ACTIVE/ARCHIVED+checksum）
+- [x] D1 V13 rule_set/rule_computation/review_case 表；规则版本生命周期（DRAFT/ACTIVE/ARCHIVED+checksum）
 - [x] D2 JSON 声明式算子引擎（map/arith/regex/enum/compare/材料对照），input/intermediates/output 全留存
 - [x] D3 重算/跨版本回放 API；规则升级 diff
 - [x] D4 review_case + REVIEW 人工任务接线（通过/驳回/编辑→field_version+EDITED edge+task_event）
@@ -76,7 +76,7 @@
 - TR：100 次确定性重算一致测试；零 LLM 调用断言；三类处置留痕测试；材料对照差异造数测试
 
 ### E（AC-E1..E5）
-- [x] E1 V12 prompt_template/model_call_log 表；PromptTemplateService（key+version+ACTIVE 渲染，PromptComposer 接线）
+- [x] E1 V14 prompt_template/model_call_log 表；PromptTemplateService（key+version+ACTIVE 渲染，PromptComposer 接线）
 - [x] E2 ChatModelProvider SPI + DashScope 适配（包装既有工厂）；结构化输出/超时/重试/降级链；RerankProvider SPI + DashScope rerank
 - [x] E3 Redis 缓存（embedding 精确缓存 + 答案缓存策略，开关/TTL/bypass）
 - [x] E4 model_call_log 全链路打点（INTENT/EXTRACT/CHAT/RERANK/JUDGE，含 token/成本/耗时/fallbackFrom）+ 单价配置

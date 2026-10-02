@@ -329,10 +329,14 @@ public class ReActExecutor {
                     ? null : resp.getMetadata().getUsage();
             Integer tokensIn = usage == null ? null : usage.getPromptTokens();
             Integer tokensOut = usage == null ? null : usage.getCompletionTokens();
+            // spring-ai 1.1.2 默认 metadata 返回 EmptyUsage(0,0)（非 null），
+            // 0/0 不是真实计量（真实调用 prompt tokens 恒 >0），按"未携带 usage"回退估算
+            boolean hasRealUsage = (tokensIn != null && tokensIn > 0)
+                    || (tokensOut != null && tokensOut > 0);
 
             long tokens;
             double cost;
-            if (tokensIn != null || tokensOut != null) {
+            if (hasRealUsage) {
                 long in = tokensIn == null ? 0 : tokensIn;
                 long out = tokensOut == null ? 0 : tokensOut;
                 tokens = Math.max(1, in + out);

@@ -7,6 +7,7 @@ import com.wikiagent.domain.agent.ReActResult;
 import com.wikiagent.domain.task.HumanRequiredException;
 import com.wikiagent.domain.task.HumanTaskKind;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.ai.chat.messages.AssistantMessage;
@@ -206,8 +207,10 @@ class ReActApprovalTest {
             int i = idx.getAndIncrement();
             if (i < actionArgs.size()) {
                 var action = om.createObjectNode().put("name", TOOL).put("args", actionArgs.get(i));
-                return resp(om.createObjectNode().put("thought", "检索")
-                        .set("action", action).putNull("finalAnswer").toString());
+                ObjectNode root = om.createObjectNode().put("thought", "检索");
+                root.set("action", action);
+                root.putNull("finalAnswer");
+                return resp(root.toString());
             }
             return resp("{\"thought\":\"结束\",\"action\":null,\"finalAnswer\":\"答案\"}");
         });
