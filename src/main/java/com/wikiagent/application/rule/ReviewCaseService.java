@@ -255,7 +255,9 @@ public class ReviewCaseService {
             // 同任务仍有 OPEN 案件：本次只留痕不恢复，等最后一个案件处置后再 resolve
             return true;
         }
-        for (Long htId : lockedHumanTaskIds) {
+        for (Object rawId : lockedHumanTaskIds) {
+            // 原生查询 id 驱动差异（H2 返回 Long，部分库可返回 BigInteger），统一 Number 转换
+            Long htId = ((Number) rawId).longValue();
             HumanTask ht = humanTaskRepo.findById(htId).orElse(null);
             if (ht == null || ht.kind() != HumanTaskKind.REVIEW
                     || (ht.status() != HumanTaskStatus.OPEN && ht.status() != HumanTaskStatus.CLAIMED)) {
