@@ -3,7 +3,6 @@ package com.wikiagent.infrastructure.tool;
 import com.wikiagent.service.retrieve.RetrievalService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
 
 import java.util.List;
@@ -14,10 +13,9 @@ import java.util.List;
  * 封装既有 {@link RetrievalService}，对 Agent 暴露单一 execute 入口。
  * 将检索到的来源与上下文格式化为文本，供节点执行结果回写交接清单。
  * <p>
- * 仅在 v1-v2 路径激活（{@code wikiagent.pero.enabled=false}）。
+ * v1-v2 与 v6 PERO 双路径共用（v6 经 {@code PeroToolExecutor} 分派调用）。
  */
 @Component
-@ConditionalOnProperty(name = "wikiagent.pero.enabled", havingValue = "false")
 public class SearchKnowledgeBaseTool {
 
     private static final Logger log = LoggerFactory.getLogger(SearchKnowledgeBaseTool.class);
