@@ -68,11 +68,11 @@
 ## 波次 2：D 规则引擎/复核 + E RAG 治理 + F Agent 治理
 
 ### D（AC-D1..D4）
-- [ ] D1 V11 rule_set/rule_computation/review_case 表；规则版本生命周期（DRAFT/ACTIVE/ARCHIVED+checksum）
-- [ ] D2 JSON 声明式算子引擎（map/arith/regex/enum/compare/材料对照），input/intermediates/output 全留存
-- [ ] D3 重算/跨版本回放 API；规则升级 diff
-- [ ] D4 review_case + REVIEW 人工任务接线（通过/驳回/编辑→field_version+EDITED edge+task_event）
-- [ ] D5 REST：规则集 CRUD/发布、重算、案件列表/处置；MODEL/RULE/HUMAN 来源标记
+- [x] D1 V11 rule_set/rule_computation/review_case 表；规则版本生命周期（DRAFT/ACTIVE/ARCHIVED+checksum）
+- [x] D2 JSON 声明式算子引擎（map/arith/regex/enum/compare/材料对照），input/intermediates/output 全留存
+- [x] D3 重算/跨版本回放 API；规则升级 diff
+- [x] D4 review_case + REVIEW 人工任务接线（通过/驳回/编辑→field_version+EDITED edge+task_event）
+- [x] D5 REST：规则集 CRUD/发布、重算、案件列表/处置；MODEL/RULE/HUMAN 来源标记
 - TR：100 次确定性重算一致测试；零 LLM 调用断言；三类处置留痕测试；材料对照差异造数测试
 
 ### E（AC-E1..E5）
