@@ -73,7 +73,8 @@ public class ReviewCaseService {
         e.setFieldKey(fieldKey);
         e.setSource(source);
         e.setConfidence(confidence);
-        e.setDiffJson(reason == null ? null : "{\"reason\":\"" + escape(reason) + "\"}");
+        // #10 用 Jackson 序列化，换行/引号/反斜杠/null reason 均安全（手工拼串只转义了 \" 与 \\）
+        e.setDiffJson(mapper.createObjectNode().put("reason", reason).toString());
         e.setStatus(ReviewCase.ReviewCaseStatus.OPEN.name());
         e.setTaskId(taskId);
         e.setCreatedAt(Instant.now());
@@ -317,9 +318,5 @@ public class ReviewCaseService {
                 e.getHumanTaskId(), e.getTaskId(), e.getRuleCode(), e.getRuleVersion(),
                 e.getComputationId(), e.getResolutionJson(), e.getResolvedBy(),
                 e.getCreatedAt(), e.getResolvedAt());
-    }
-
-    private static String escape(String s) {
-        return s.replace("\\", "\\\\").replace("\"", "\\\"");
     }
 }

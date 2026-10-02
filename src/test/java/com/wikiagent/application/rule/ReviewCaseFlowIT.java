@@ -4,6 +4,8 @@ import com.wikiagent.application.lineage.ProvenanceService;
 import com.wikiagent.domain.lineage.EdgeType;
 import com.wikiagent.domain.rule.ReviewCase;
 import com.wikiagent.domain.rule.RuleComputation;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -163,5 +165,39 @@ class ReviewCaseFlowIT {
                 .hasSize(1);
         assertThat(reopened.stream().filter(c -> c.status() == ReviewCase.ReviewCaseStatus.APPROVED))
                 .hasSize(1);
+    }
+
+    /**
+     * #10 diff_json（reason 含换行/引号/反斜杠）与处置后的 resolution_json
+     * 必须都是 Jackson 可读回的合法 JSON，且内容无损。
+     */
+    @Test
+    void lowConfidenceDiffJsonIsValidJsonWithSpecialChars() throws Exception {
+        ObjectMapper mapper = new ObjectMapper();
+        String docId = "doc-json-" + System.nanoTime();
+        String tricky = "模型说：\"值不对\"\n第二行\\路径\tend";
+
+        ReviewCase created = reviewCaseService.createLowConfidence(docId, 1, "f1",
+                "MODEL", 0.2, tricky, null);
+
+        ReviewCase reloaded = reviewCaseService.list(null, docId).stream()
+                .filter(c -> c.id().equals(created.id())).findFirst().orElseThrow();
+        JsonNode diffNode = mapper.readTree(reloaded.diffJson());
+        assertThat(diffNode.get("reason").asText()).isEqualTo(tricky);
+
+        // null reason 也必须是合法 JSON（{"reason":null}），不产生裸 null 列歧义
+        ReviewCase nullReason = reviewCaseService.createLowConfidence(docId, 1, "f2",
+                "MODEL", 0.1, null, null);
+        JsonNode nullNode = mapper.readTree(
+                reviewCaseService.list(null, docId).stream()
+                        .filter(c -> c.id().equals(nullReason.id())).findFirst().orElseThrow()
+                        .diffJson());
+        assertThat(nullNode.get("reason").isNull()).isTrue();
+
+        ReviewCase disposed = reviewCaseService.dispose(created.id(),
+                ReviewCase.ReviewAction.REJECT, null, "reviewer-x");
+        JsonNode resolutionNode = mapper.readTree(disposed.resolutionJson());
+        assertThat(resolutionNode.get("action").asText())
+                .isEqualTo(ReviewCase.ReviewAction.REJECT.name());
     }
 }
