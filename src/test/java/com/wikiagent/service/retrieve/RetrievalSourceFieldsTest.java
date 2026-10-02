@@ -6,6 +6,7 @@ import com.wikiagent.domain.llm.spi.RerankProvider;
 import com.wikiagent.entity.KbChildChunk;
 import com.wikiagent.entity.KbDocument;
 import com.wikiagent.entity.KbParentChunk;
+import com.wikiagent.infrastructure.persistence.KnowledgeMetadataEntity;
 import com.wikiagent.infrastructure.persistence.KnowledgeMetadataJpaDao;
 import com.wikiagent.infrastructure.persistence.MetricEventJpaDao;
 import com.wikiagent.repo.KbChildChunkRepo;
@@ -61,13 +62,19 @@ class RetrievalSourceFieldsTest {
 
     private RetrievalService service(MilvusStoreService milvus, KbChildChunkRepo childRepo,
                                      KbParentChunkRepo parentRepo, KbDocumentRepo docRepo) {
+        return service(milvus, childRepo, parentRepo, docRepo, provider(null));
+    }
+
+    private RetrievalService service(MilvusStoreService milvus, KbChildChunkRepo childRepo,
+                                     KbParentChunkRepo parentRepo, KbDocumentRepo docRepo,
+                                     ObjectProvider<KnowledgeMetadataJpaDao> metadataDao) {
         EmbeddingModel embeddingModel = mock(EmbeddingModel.class);
         when(embeddingModel.embed(any(String.class))).thenReturn(new float[]{0.1f});
         WikiAgentProperties props = new WikiAgentProperties(null,
                 new WikiAgentProperties.Retrieve(20, 10, 60, 12000), null, null);
         return new RetrievalService(props, milvus, embeddingModel, parentRepo, docRepo, childRepo,
                 mock(MetricEventJpaDao.class),
-                provider(null), provider(null), false, provider(null));
+                provider(null), metadataDao, false, provider(null));
     }
 
     private static <T> ObjectProvider<T> provider(T bean) {
@@ -95,8 +102,14 @@ class RetrievalSourceFieldsTest {
         when(parentRepo.findAllById(any())).thenReturn(List.of(parent()));
         KbDocumentRepo docRepo = mock(KbDocumentRepo.class);
         when(docRepo.findAllById(any())).thenReturn(List.of(doc()));
+        // V11 knowledge_metadata 为代表子块 c2 回填 artifactId=77
+        KnowledgeMetadataJpaDao metadataDao = mock(KnowledgeMetadataJpaDao.class);
+        KnowledgeMetadataEntity meta = new KnowledgeMetadataEntity();
+        meta.setChunkId("c2");
+        meta.setArtifactId(77L);
+        when(metadataDao.findByChunkIdIn(any())).thenReturn(List.of(meta));
 
-        RetrievalService svc = service(milvus, childRepo, parentRepo, docRepo);
+        RetrievalService svc = service(milvus, childRepo, parentRepo, docRepo, provider(metadataDao));
         RetrievalService.RetrievalResult result = svc.assemble(
                 svc.search(svc.newAccumulator(), List.of("查询")), "查询");
 
@@ -107,7 +120,7 @@ class RetrievalSourceFieldsTest {
         assertEquals(3, s.versionNo());       // 代表子块 c2 的版本
         assertEquals(7, s.pageNo());          // 代表子块 c2 的页码
         assertEquals("高分代表子块内容", s.snippet()); // strip 空白
-        assertNull(s.artifactId());           // 预留
+        assertEquals("77", s.artifactId());   // V11 metadata.artifact_id 回填
         assertEquals(0.9, s.score(), 1e-9);
         assertEquals("手册.md", s.filename());
     }

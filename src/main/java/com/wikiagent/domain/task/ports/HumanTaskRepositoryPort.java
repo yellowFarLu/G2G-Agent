@@ -23,6 +23,10 @@ public interface HumanTaskRepositoryPort {
     /** OPEN→CLAIMED 的 CAS 认领：expectedLockVersion 匹配才置 claimedBy，返回是否成功。 */
     boolean casClaim(Long id, String userId, int expectedLockVersion);
 
-    /** 终结人工任务：INPUT 落 formValue；DIRECT_RESOLVE 记录直接处置。 */
-    void resolve(Long id, String userId, JsonNode formValue, HumanTaskKind kind);
+    /**
+     * 条件终结人工任务（仅 OPEN/CLAIMED 可终结）。
+     *
+     * @return 实际更新行数；0 表示并发竞争下任务已被他人处置，调用方必须中止后续状态迁移
+     */
+    int resolve(Long id, String userId, JsonNode formValue, HumanTaskKind kind);
 }

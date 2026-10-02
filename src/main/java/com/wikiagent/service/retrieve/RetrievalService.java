@@ -57,8 +57,8 @@ public class RetrievalService {
      *   <li>{@code versionNo}/{@code pageNo}：取该父块代表子块（父块下最高分、平局取 childIndex 小者）
      *       的实体值；代表子块行缺失时 versionNo=0、pageNo=null</li>
      *   <li>{@code snippet}：代表子块 content 去空白后前 200 字符</li>
-     *   <li>{@code artifactId}：预留字段（恒 null）。kb_child_chunk 表无该列，
-     *       未来可由 knowledge_metadata.artifact_id 回填</li>
+     *   <li>{@code artifactId}：由 knowledge_metadata.artifact_id（V11）按代表子块回填；
+     *       未打标的公共知识为 null</li>
      *   <li>{@code filename}：保留在末尾，JSON 仍含 filename 以兼容现有前端</li>
      * </ul>
      * 序列化 JSON 字段名保持驼峰（index/docId/versionNo/pageNo/snippet/artifactId/score/filename）。
@@ -555,6 +555,15 @@ public class RetrievalService {
                 repChildren.put(c.getId(), c);
             }
         }
+        // §2.5：artifactId 由 knowledge_metadata.artifact_id（V11）回填；未打标公共知识为 null
+        Map<String, String> artifactIds = new HashMap<>();
+        if (metadataDao != null && !repChildren.isEmpty()) {
+            for (KnowledgeMetadataEntity m : metadataDao.findByChunkIdIn(new ArrayList<>(repChildren.keySet()))) {
+                if (m.getArtifactId() != null) {
+                    artifactIds.put(m.getChunkId(), String.valueOf(m.getArtifactId()));
+                }
+            }
+        }
 
         int budget = props.retrieve().parentCharBudget();
         StringBuilder ctx = new StringBuilder();
@@ -584,7 +593,7 @@ public class RetrievalService {
                     child != null ? child.getVersionNo() : 0,
                     child != null ? child.getPageNo() : null,
                     snippetOf(child == null ? null : child.getContent()),
-                    null, // artifactId 预留：kb_child_chunk 无该列，后续由 knowledge_metadata 回填
+                    rc == null ? null : artifactIds.get(rc.childId()),
                     acc.bestScore.getOrDefault(parentId, 0.0), filename));
             idx++;
         }

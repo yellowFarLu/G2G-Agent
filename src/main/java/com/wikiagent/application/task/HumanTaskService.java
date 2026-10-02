@@ -89,7 +89,11 @@ public class HumanTaskService {
         if (task.status() != com.wikiagent.domain.task.TaskStatus.WAITING_HUMAN) {
             throw new ConflictException("任务当前状态不可人工处置: " + task.status());
         }
-        humanRepo.resolve(id, userId, formValue, kind);
+        int resolved = humanRepo.resolve(id, userId, formValue, kind);
+        if (resolved == 0) {
+            // 条件更新未命中：并发竞争下人工任务已被他人处置（状态不再是 OPEN/CLAIMED）
+            throw new ConflictException("人工任务已被并发处置: " + id);
+        }
         eventRepo.append(new TaskEvent(ht.taskId(), TaskEventType.HUMAN_RESOLVE, ActorType.USER, userId,
                 null, Instant.now()));
         if (kind == HumanTaskKind.INPUT

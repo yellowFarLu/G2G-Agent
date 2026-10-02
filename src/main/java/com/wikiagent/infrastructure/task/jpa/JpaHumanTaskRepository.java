@@ -60,9 +60,9 @@ public class JpaHumanTaskRepository implements HumanTaskRepositoryPort {
     }
 
     @Override
-    public void resolve(Long id, String userId, JsonNode formValue, HumanTaskKind kind) {
+    public int resolve(Long id, String userId, JsonNode formValue, HumanTaskKind kind) {
         // kind 参数保留端口签名一致性（INPUT/DIRECT_RESOLVE 终结动作相同，语义由调用方记录事件）
-        dao.resolve(id, userId, formValue == null ? null : formValue.toString(),
+        return dao.resolve(id, userId, formValue == null ? null : formValue.toString(),
                 JpaTaskRepository.toLocalDateTime(Instant.now()));
     }
 
