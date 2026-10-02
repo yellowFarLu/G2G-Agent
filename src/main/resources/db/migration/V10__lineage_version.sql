@@ -15,7 +15,7 @@ CREATE TABLE IF NOT EXISTS doc_artifact (
     created_at    TIMESTAMP    NOT NULL,
     CONSTRAINT uk_artifact_doc_type_page UNIQUE (doc_id, version_no, artifact_type, page_no)
 );
-CREATE INDEX IF NOT EXISTS idx_artifact_doc ON doc_artifact (doc_id, version_no);
+CREATE INDEX idx_artifact_doc ON doc_artifact (doc_id, version_no);
 
 -- ============ 血缘边（产物/字段/版本间的有向依赖）============
 CREATE TABLE IF NOT EXISTS provenance_edge (
@@ -30,9 +30,9 @@ CREATE TABLE IF NOT EXISTS provenance_edge (
     note            VARCHAR(512),
     created_at      TIMESTAMP    NOT NULL
 );
-CREATE INDEX IF NOT EXISTS idx_edge_doc ON provenance_edge (doc_id, version_no);
-CREATE INDEX IF NOT EXISTS idx_edge_from ON provenance_edge (doc_id, from_ref);
-CREATE INDEX IF NOT EXISTS idx_edge_to ON provenance_edge (doc_id, to_ref);
+CREATE INDEX idx_edge_doc ON provenance_edge (doc_id, version_no);
+CREATE INDEX idx_edge_from ON provenance_edge (doc_id, from_ref);
+CREATE INDEX idx_edge_to ON provenance_edge (doc_id, to_ref);
 
 -- ============ 抽取字段（当前快照，每文档每字段唯一）============
 CREATE TABLE IF NOT EXISTS extracted_field (
@@ -53,7 +53,7 @@ CREATE TABLE IF NOT EXISTS extracted_field (
     updated_at      TIMESTAMP    NOT NULL,
     CONSTRAINT uk_field_doc_key UNIQUE (doc_id, field_key)
 );
-CREATE INDEX IF NOT EXISTS idx_field_doc ON extracted_field (doc_id, version_no);
+CREATE INDEX idx_field_doc ON extracted_field (doc_id, version_no);
 
 -- ============ 字段版本（不可变历史，每次值/置信/来源变更写一行）============
 CREATE TABLE IF NOT EXISTS field_version (
@@ -69,7 +69,7 @@ CREATE TABLE IF NOT EXISTS field_version (
     created_at      TIMESTAMP    NOT NULL,
     CONSTRAINT uk_field_ver UNIQUE (doc_id, field_key, version_no)
 );
-CREATE INDEX IF NOT EXISTS idx_field_ver_doc ON field_version (doc_id, field_key);
+CREATE INDEX idx_field_ver_doc ON field_version (doc_id, field_key);
 
 -- ============ 文档版本（重解析产生新版本，旧 chunk is_active=false）============
 CREATE TABLE IF NOT EXISTS doc_version (
@@ -84,4 +84,4 @@ CREATE TABLE IF NOT EXISTS doc_version (
     created_at        TIMESTAMP    NOT NULL,
     CONSTRAINT uk_doc_ver UNIQUE (doc_id, version_no)
 );
-CREATE INDEX IF NOT EXISTS idx_doc_ver_doc ON doc_version (doc_id, status);
+CREATE INDEX idx_doc_ver_doc ON doc_version (doc_id, status);

@@ -13,7 +13,7 @@ CREATE TABLE IF NOT EXISTS prompt_template (
     updated_at  TIMESTAMP    NOT NULL,
     CONSTRAINT uk_prompt_code_ver UNIQUE (code, version)
 );
-CREATE INDEX IF NOT EXISTS idx_prompt_code_status ON prompt_template (code, status);
+CREATE INDEX idx_prompt_code_status ON prompt_template (code, status);
 
 -- ============ 模型调用日志（INTENT/EXTRACT/CHAT/RERANK/JUDGE 全链路打点）============
 CREATE TABLE IF NOT EXISTS model_call_log (
@@ -32,6 +32,6 @@ CREATE TABLE IF NOT EXISTS model_call_log (
     fallback_from VARCHAR(64),                  -- 降级来源模型/provider 名，可空
     created_at    TIMESTAMP    NOT NULL
 );
-CREATE INDEX IF NOT EXISTS idx_model_call_trace ON model_call_log (trace_id);
-CREATE INDEX IF NOT EXISTS idx_model_call_purpose ON model_call_log (purpose, created_at);
-CREATE INDEX IF NOT EXISTS idx_model_call_session ON model_call_log (session_id);
+CREATE INDEX idx_model_call_trace ON model_call_log (trace_id);
+CREATE INDEX idx_model_call_purpose ON model_call_log (purpose, created_at);
+CREATE INDEX idx_model_call_session ON model_call_log (session_id);

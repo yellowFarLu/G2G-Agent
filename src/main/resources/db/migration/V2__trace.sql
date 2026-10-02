@@ -21,6 +21,6 @@ CREATE TABLE IF NOT EXISTS agent_trace (
     model_used      VARCHAR(64)                     -- v1-v2 §7: 路由的模型名
 );
 
-CREATE INDEX IF NOT EXISTS idx_trace_conversation ON agent_trace (conversation_id);
-CREATE INDEX IF NOT EXISTS idx_trace_session ON agent_trace (session_id);
-CREATE INDEX IF NOT EXISTS idx_trace_user ON agent_trace (user_id);
+CREATE INDEX idx_trace_conversation ON agent_trace (conversation_id);
+CREATE INDEX idx_trace_session ON agent_trace (session_id);
+CREATE INDEX idx_trace_user ON agent_trace (user_id);

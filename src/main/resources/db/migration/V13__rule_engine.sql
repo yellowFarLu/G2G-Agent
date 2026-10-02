@@ -17,7 +17,7 @@ CREATE TABLE IF NOT EXISTS rule_set (
     published_at TIMESTAMP   NULL,
     CONSTRAINT uk_rule_set_code_version UNIQUE (code, version)
 );
-CREATE INDEX IF NOT EXISTS idx_rule_set_code ON rule_set (code, status);
+CREATE INDEX idx_rule_set_code ON rule_set (code, status);
 
 -- ============ 规则计算（输入/中间量/输出全留存，重算回放的判定依据）============
 CREATE TABLE IF NOT EXISTS rule_computation (
@@ -34,8 +34,8 @@ CREATE TABLE IF NOT EXISTS rule_computation (
     trace_id           VARCHAR(64),
     computed_at        TIMESTAMP    NOT NULL
 );
-CREATE INDEX IF NOT EXISTS idx_rule_comp_rule ON rule_computation (rule_code, rule_version, computed_at);
-CREATE INDEX IF NOT EXISTS idx_rule_comp_doc ON rule_computation (doc_id);
+CREATE INDEX idx_rule_comp_rule ON rule_computation (rule_code, rule_version, computed_at);
+CREATE INDEX idx_rule_comp_doc ON rule_computation (doc_id);
 
 -- ============ 复核案件（低置信/材料差异/规则比对差异 → REVIEW 人工任务聚合）============
 CREATE TABLE IF NOT EXISTS review_case (
@@ -58,6 +58,6 @@ CREATE TABLE IF NOT EXISTS review_case (
     created_at      TIMESTAMP    NOT NULL,
     resolved_at     TIMESTAMP    NULL
 );
-CREATE INDEX IF NOT EXISTS idx_review_case_status ON review_case (status, created_at);
-CREATE INDEX IF NOT EXISTS idx_review_case_doc ON review_case (doc_id);
-CREATE INDEX IF NOT EXISTS idx_review_case_task ON review_case (task_id);
+CREATE INDEX idx_review_case_status ON review_case (status, created_at);
+CREATE INDEX idx_review_case_doc ON review_case (doc_id);
+CREATE INDEX idx_review_case_task ON review_case (task_id);

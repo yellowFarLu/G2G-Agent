@@ -35,9 +35,9 @@ CREATE TABLE IF NOT EXISTS task_instance (
     CONSTRAINT uk_biz_key UNIQUE (biz_key)
 );
 
-CREATE INDEX IF NOT EXISTS idx_status_next_run ON task_instance (status, next_run_at);
-CREATE INDEX IF NOT EXISTS idx_lease ON task_instance (status, lease_expire_at);
-CREATE INDEX IF NOT EXISTS idx_submitter ON task_instance (submitted_by);
+CREATE INDEX idx_status_next_run ON task_instance (status, next_run_at);
+CREATE INDEX idx_lease ON task_instance (status, lease_expire_at);
+CREATE INDEX idx_submitter ON task_instance (submitted_by);
 
 -- 任务步骤（规格 2.2）
 CREATE TABLE IF NOT EXISTS task_step (
@@ -54,7 +54,7 @@ CREATE TABLE IF NOT EXISTS task_step (
     CONSTRAINT uk_task_step UNIQUE (task_id, step_no)
 );
 
-CREATE INDEX IF NOT EXISTS idx_step_task ON task_step (task_id);
+CREATE INDEX idx_step_task ON task_step (task_id);
 
 -- 任务事件（追加式，规格 2.3）
 CREATE TABLE IF NOT EXISTS task_event (
@@ -67,8 +67,8 @@ CREATE TABLE IF NOT EXISTS task_event (
     created_at  TIMESTAMP    NOT NULL
 );
 
-CREATE INDEX IF NOT EXISTS idx_task_event ON task_event (task_id, id);
-CREATE INDEX IF NOT EXISTS idx_event_type_time ON task_event (event_type, created_at);
+CREATE INDEX idx_task_event ON task_event (task_id, id);
+CREATE INDEX idx_event_type_time ON task_event (event_type, created_at);
 
 -- 人工接管点（规格 2.4）
 CREATE TABLE IF NOT EXISTS human_task (
@@ -90,7 +90,7 @@ CREATE TABLE IF NOT EXISTS human_task (
     CONSTRAINT uk_task_step_kind UNIQUE (task_id, step_no, kind)
 );
 
-CREATE INDEX IF NOT EXISTS idx_ht_status ON human_task (status);
+CREATE INDEX idx_ht_status ON human_task (status);
 
 -- ============ 交接清单（替代 todo.json，规格 2.5） ============
 
@@ -120,7 +120,7 @@ CREATE TABLE IF NOT EXISTS handover_node (
     created_at      TIMESTAMP    NOT NULL
 );
 
-CREATE INDEX IF NOT EXISTS idx_checklist ON handover_node (checklist_id);
+CREATE INDEX idx_checklist ON handover_node (checklist_id);
 
 CREATE TABLE IF NOT EXISTS handover_abandoned_path (
     id           BIGINT      NOT NULL AUTO_INCREMENT PRIMARY KEY,
@@ -130,7 +130,7 @@ CREATE TABLE IF NOT EXISTS handover_abandoned_path (
     created_at   TIMESTAMP   NOT NULL
 );
 
-CREATE INDEX IF NOT EXISTS idx_abandoned_checklist ON handover_abandoned_path (checklist_id);
+CREATE INDEX idx_abandoned_checklist ON handover_abandoned_path (checklist_id);
 
 CREATE TABLE IF NOT EXISTS handover_data_ref (
     id           BIGINT       NOT NULL AUTO_INCREMENT PRIMARY KEY,

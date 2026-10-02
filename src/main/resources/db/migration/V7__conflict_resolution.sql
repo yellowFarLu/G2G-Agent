@@ -17,5 +17,5 @@ CREATE TABLE IF NOT EXISTS conflict_resolution (
     CONSTRAINT uk_conflict_pair UNIQUE (chunk_id_a, chunk_id_b)
 );
 
-CREATE INDEX IF NOT EXISTS idx_conflict_status ON conflict_resolution (status);
-CREATE INDEX IF NOT EXISTS idx_conflict_domain ON conflict_resolution (domain_tag, sub_domain_tag);
+CREATE INDEX idx_conflict_status ON conflict_resolution (status);
+CREATE INDEX idx_conflict_domain ON conflict_resolution (domain_tag, sub_domain_tag);

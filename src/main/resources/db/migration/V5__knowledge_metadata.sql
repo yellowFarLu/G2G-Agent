@@ -17,6 +17,6 @@ CREATE TABLE IF NOT EXISTS knowledge_metadata (
     CONSTRAINT uk_knowledge_chunk UNIQUE (chunk_id)
 );
 
-CREATE INDEX IF NOT EXISTS idx_km_domain ON knowledge_metadata (domain_tag, sub_domain_tag);
-CREATE INDEX IF NOT EXISTS idx_km_doc ON knowledge_metadata (doc_id);
-CREATE INDEX IF NOT EXISTS idx_km_created ON knowledge_metadata (created_by, created_identity);
+CREATE INDEX idx_km_domain ON knowledge_metadata (domain_tag, sub_domain_tag);
+CREATE INDEX idx_km_doc ON knowledge_metadata (doc_id);
+CREATE INDEX idx_km_created ON knowledge_metadata (created_by, created_identity);
