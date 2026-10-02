@@ -184,8 +184,18 @@ public class ReviewCaseService {
                     EdgeType.REVIEWED, action.name());
         }
 
-        // 5) task_event 留痕（taskId 非空）
+        // 5) 恢复关联 REVIEW 人工任务（#7 行锁串行化 + 复核闸门）。
+        //    存在 OPEN/CLAIMED REVIEW 人工任务时由 HumanTaskService.resolve 统一写恰好一条
+        //    HUMAN_RESOLVE 事件（caseId/action/editedFields/resolvedBy 已放入 formValue 持久化），
+        //    本服务不再自行 append，避免一次处置写出两条重复事件（#9）。
+        boolean recoverableHumanTask = false;
         if (e.getTaskId() != null) {
+            recoverableHumanTask = resumeReviewHumanTask(e, action, editedFields, userId);
+        }
+
+        // 6) task_event 留痕（taskId 非空）：仅当不存在可恢复的 OPEN/CLAIMED REVIEW
+        //    人工任务时才自行补一条（此时 resolve 不会执行，保证处置必有一条留痕）。
+        if (e.getTaskId() != null && !recoverableHumanTask) {
             TaskEventRepositoryPort eventRepo = eventRepoProvider.getIfAvailable();
             if (eventRepo != null) {
                 ObjectNode detail = mapper.createObjectNode()
@@ -195,11 +205,6 @@ public class ReviewCaseService {
                 eventRepo.append(new TaskEvent(e.getTaskId(), TaskEventType.HUMAN_RESOLVE,
                         ActorType.USER, userId, detail, now));
             }
-        }
-
-        // 6) 恢复关联 REVIEW 人工任务（OPEN/CLAIMED）
-        if (e.getTaskId() != null) {
-            resumeReviewHumanTask(e, action, editedFields, userId);
         }
         return saved;
     }
