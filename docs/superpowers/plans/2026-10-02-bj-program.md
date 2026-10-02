@@ -85,10 +85,10 @@
 - TR：越权 domain 隔离 IT；provider 降级桩测试；缓存命中/失效测试；引用完整性测试；打点计数测试
 
 ### F（AC-F1..F4）
-- [ ] F1 ToolPermissionRegistry（工具→角色/scope + 每 Agent allowlist），调用前拦截+TOOL_DENIED 审计
-- [ ] F2 任务预算（token/cost/maxIterations，payload 覆盖+系统上限封顶），ReAct 迭代边界计量与超限策略（PAUSE_HUMAN/FAIL），额度持久化 task payload/step checkpoint
-- [ ] F3 上下文用量计量+压缩；TOOL_APPROVAL 人工任务（批准/驳回/超时）
-- [ ] F4 四类边界文档化+代码标记（固定流程 handler / Agent / 规则版本化工具 / 人工）
+- [x] F1 ToolPermissionRegistry（工具→角色/scope + 每 Agent allowlist），调用前拦截+TOOL_DENIED 审计
+- [x] F2 任务预算（token/cost/maxIterations，payload 覆盖+系统上限封顶），ReAct 迭代边界计量与超限策略（PAUSE_HUMAN/FAIL），额度持久化 task payload/step checkpoint
+- [x] F3 上下文用量计量+压缩；TOOL_APPROVAL 人工任务（批准/驳回/超时）
+- [x] F4 四类边界文档化+代码标记（固定流程 handler / Agent / 规则版本化工具 / 人工）
 - TR：三类越权拒绝测试；预算超限两策略测试；批准续跑/驳回跳过测试（沿用 blockFirstReAct 模式）；plannerCalls==1 保持
 
 ### 波 2 闸门
