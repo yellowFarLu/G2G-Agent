@@ -1,6 +1,10 @@
 package com.wikiagent.service.agent;
 
+import com.wikiagent.application.llm.ModelCallRecorder;
+import com.wikiagent.application.prompt.PromptTemplateService;
 import com.wikiagent.config.WikiAgentProperties;
+import com.wikiagent.domain.llm.ModelCallLogPurpose;
+import com.wikiagent.domain.prompt.RenderedPrompt;
 import com.wikiagent.infrastructure.trace.RagTraceRecorder;
 import com.wikiagent.service.chat.ChatStreamer;
 import com.wikiagent.service.chat.FallbackAnswerService;
@@ -12,8 +16,11 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.messages.SystemMessage;
 import org.springframework.ai.chat.messages.UserMessage;
+import org.springframework.ai.chat.metadata.Usage;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.chat.prompt.Prompt;
+import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
 import java.util.ArrayList;
@@ -73,10 +80,28 @@ public class AgentRagService {
     private final ChatStreamer streamer;
     private final FallbackAnswerService fallback;
     private final RagTraceRecorder traceRecorder;
+    /** E4：模型调用打点器（可选）。 */
+    private final ModelCallRecorder callRecorder;
+    /** E1：提示词模板服务（可选，未配置模板时回退静态拼接）。 */
+    private final PromptTemplateService templateService;
+    /** 打点用模型名（chatModel 是 Primary simpleChatModel）。 */
+    private final String chatModelName;
 
+    /** 兼容旧构造（既有测试）：不打点、不用模板。 */
     public AgentRagService(WikiAgentProperties props, ChatModel chatModel, RetrievalService retrieval,
                            QueryRewriteService rewriter, ChatStreamer streamer,
                            FallbackAnswerService fallback, RagTraceRecorder traceRecorder) {
+        this(props, chatModel, retrieval, rewriter, streamer, fallback, traceRecorder, null, null,
+                "qwen-plus");
+    }
+
+    @org.springframework.beans.factory.annotation.Autowired
+    public AgentRagService(WikiAgentProperties props, ChatModel chatModel, RetrievalService retrieval,
+                           QueryRewriteService rewriter, ChatStreamer streamer,
+                           FallbackAnswerService fallback, RagTraceRecorder traceRecorder,
+                           ObjectProvider<ModelCallRecorder> callRecorder,
+                           ObjectProvider<PromptTemplateService> templateService,
+                           @Value("${wikiagent.routing.simple-model:qwen-plus}") String chatModelName) {
         this.props = props;
         this.chatModel = chatModel;
         this.retrieval = retrieval;
@@ -84,6 +109,9 @@ public class AgentRagService {
         this.streamer = streamer;
         this.fallback = fallback;
         this.traceRecorder = traceRecorder;
+        this.callRecorder = callRecorder == null ? null : callRecorder.getIfAvailable();
+        this.templateService = templateService == null ? null : templateService.getIfAvailable();
+        this.chatModelName = chatModelName;
     }
 
     /** 路由+规划的决策结果。 */
@@ -100,7 +128,7 @@ public class AgentRagService {
 
         // 1. 路由 + 查询规划（失败降级为单查询检索）
         sse.send("stage", Map.of("stage", "routing"));
-        Plan plan = plan(question);
+        Plan plan = plan(question, userId, sessionId);
         if ("direct".equals(plan.mode())) {
             log.debug("路由结果: direct，跳过检索");
             traceRecorder.record(userId, sessionId, "agent-rag-routing", "plan",
@@ -153,7 +181,7 @@ public class AgentRagService {
 
             // 非空即评估（末轮也评估）：末轮评估的唯一用途是判定"弱命中→走未命中兜底"
             sse.send("stage", Map.of("stage", "grading", "round", round));
-            Grade grade = grade(question, result.context());
+            Grade grade = grade(question, result.context(), userId, sessionId);
             lastGrade = grade;
             if (grade.sufficient()) {
                 log.debug("第 {} 轮证据充分，结束检索", round);
@@ -187,15 +215,21 @@ public class AgentRagService {
         traceRecorder.record(userId, sessionId, "agent-rag-generate", "generate",
                 question, "sources=" + result.sources().size(), "OK", null);
         sse.send("stage", Map.of("stage", "generating"));
+        RenderedPrompt sys = PromptComposer.systemPrompt(templateService);
+        RenderedPrompt usr = PromptComposer.userPrompt(templateService, result.context(), question);
         streamer.stream(new Prompt(List.of(
-                new SystemMessage(PromptComposer.SYSTEM),
-                new UserMessage(PromptComposer.user(result.context(), question)))), sse);
+                new SystemMessage(sys.content()),
+                new UserMessage(usr.content()))), sse);
     }
 
     /** 路由+规划：LLM 调用失败或输出异常时降级为 search + 原始问题。 */
     Plan plan(String question) {
+        return plan(question, null, null);
+    }
+
+    Plan plan(String question, String userId, String sessionId) {
         try {
-            String out = call(PLANNER_SYSTEM, question);
+            String out = call(PLANNER_SYSTEM, question, ModelCallLogPurpose.INTENT, userId, sessionId);
             Map<String, Object> json = JsonExtractor.parseObject(out);
             if (json.isEmpty()) {
                 log.warn("路由规划输出无法解析，降级为默认检索: {}", out);
@@ -217,10 +251,14 @@ public class AgentRagService {
 
     /** 充分性评估：失败时视为充分，不阻断回答。 */
     Grade grade(String question, String context) {
+        return grade(question, context, null, null);
+    }
+
+    Grade grade(String question, String context, String userId, String sessionId) {
         try {
             String user = "用户问题：" + question.strip() + "\n\n已检索到的参考资料：\n" + context.strip()
                     + "\n\n请判断以上资料是否足以回答问题，只输出 JSON。";
-            String out = call(GRADER_SYSTEM, user);
+            String out = call(GRADER_SYSTEM, user, ModelCallLogPurpose.JUDGE, userId, sessionId);
             Map<String, Object> json = JsonExtractor.parseObject(out);
             if (json.isEmpty()) {
                 log.warn("评估输出无法解析，视为充分: {}", out);
@@ -236,11 +274,48 @@ public class AgentRagService {
     }
 
     private String call(String system, String user) {
-        var resp = chatModel.call(new Prompt(List.of(new SystemMessage(system), new UserMessage(user))));
-        if (resp == null || resp.getResult() == null || resp.getResult().getOutput() == null) {
+        return call(system, user, ModelCallLogPurpose.CHAT, null, null);
+    }
+
+    private String call(String system, String user, ModelCallLogPurpose purpose,
+                        String userId, String sessionId) {
+        long started = System.currentTimeMillis();
+        try {
+            var resp = chatModel.call(new Prompt(List.of(new SystemMessage(system), new UserMessage(user))));
+            long latency = System.currentTimeMillis() - started;
+            if (resp == null || resp.getResult() == null || resp.getResult().getOutput() == null) {
+                record(purpose, null, null, latency, false, userId, sessionId);
+                return null;
+            }
+            record(purpose, usageOf(resp, true), usageOf(resp, false), latency, true, userId, sessionId);
+            return resp.getResult().getOutput().getText();
+        } catch (Exception e) {
+            record(purpose, null, null, System.currentTimeMillis() - started, false, userId, sessionId);
+            throw e;
+        }
+    }
+
+    private void record(ModelCallLogPurpose purpose, Integer tokensIn, Integer tokensOut, long latency,
+                        boolean ok, String userId, String sessionId) {
+        if (callRecorder != null) {
+            callRecorder.record(purpose, "dashscope", chatModelName, tokensIn, tokensOut,
+                    latency, ok, null, userId, sessionId);
+        }
+    }
+
+    private static Integer usageOf(org.springframework.ai.chat.model.ChatResponse resp, boolean prompt) {
+        try {
+            if (resp == null || resp.getMetadata() == null) {
+                return null;
+            }
+            Usage u = resp.getMetadata().getUsage();
+            if (u == null) {
+                return null;
+            }
+            return prompt ? u.getPromptTokens() : u.getCompletionTokens();
+        } catch (Exception e) {
             return null;
         }
-        return resp.getResult().getOutput().getText();
     }
 
     /** 归一化规划出的查询列表：仅保留非空字符串、去重、限量；全部无效时回退原始问题。 */

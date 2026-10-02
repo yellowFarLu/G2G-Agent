@@ -1,6 +1,8 @@
 package com.wikiagent.infrastructure.llm;
 
+import com.wikiagent.application.llm.ModelCallRecorder;
 import com.wikiagent.domain.llm.spi.ChatModelProvider;
+import jakarta.annotation.PostConstruct;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
@@ -31,11 +33,14 @@ public class LlmProviderConfig {
             @Value("${wikiagent.llm.max-attempts:2}") int maxAttempts,
             @Value("${wikiagent.llm.retry-backoff-ms:300}") long retryBackoffMs,
             @Value("${wikiagent.llm.circuit-failure-threshold:3}") int circuitFailureThreshold,
-            @Value("${wikiagent.llm.circuit-open-sec:60}") long circuitOpenSec) {
+            @Value("${wikiagent.llm.circuit-open-sec:60}") long circuitOpenSec,
+            ModelCallRecorder recorder) {
         List<ChatModelProvider> candidates = new ArrayList<>(providers);
         candidates.add(new NoOpChatModelProvider(simpleModel)); // 降级末端
-        return new ChatModelProviderChain(candidates, maxAttempts, retryBackoffMs,
+        ChatModelProviderChain chain = new ChatModelProviderChain(candidates, maxAttempts, retryBackoffMs,
                 circuitFailureThreshold, circuitOpenSec);
+        chain.setRecorder(recorder);
+        return chain;
     }
 
     @Bean

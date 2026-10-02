@@ -1,5 +1,7 @@
 package com.wikiagent.infrastructure.routing;
 
+import com.wikiagent.application.llm.ModelCallRecorder;
+import com.wikiagent.domain.llm.ModelCallLogPurpose;
 import com.wikiagent.domain.routing.Intent;
 import com.wikiagent.domain.routing.LlmRouterPort;
 import com.wikiagent.domain.routing.RouteDecision;
@@ -8,8 +10,10 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.messages.SystemMessage;
 import org.springframework.ai.chat.messages.UserMessage;
+import org.springframework.ai.chat.metadata.Usage;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.chat.prompt.Prompt;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
@@ -51,13 +55,20 @@ public class DashScopeLlmRouter implements LlmRouterPort {
     private final ChatModel intentChatModel;
     private final String simpleModel;
     private final String complexModel;
+    /** E4：可选打点器。 */
+    private final ModelCallRecorder recorder;
+    private final String intentModelName;
 
     public DashScopeLlmRouter(@Qualifier("intentChatModel") ChatModel intentChatModel,
                               @Value("${wikiagent.routing.simple-model:qwen-plus}") String simpleModel,
-                              @Value("${wikiagent.routing.complex-model:qwen-max}") String complexModel) {
+                              @Value("${wikiagent.routing.complex-model:qwen-max}") String complexModel,
+                              @Value("${wikiagent.routing.intent-model:qwen-flash}") String intentModel,
+                              ObjectProvider<ModelCallRecorder> recorder) {
         this.intentChatModel = intentChatModel;
         this.simpleModel = simpleModel;
         this.complexModel = complexModel;
+        this.intentModelName = intentModel;
+        this.recorder = recorder == null ? null : recorder.getIfAvailable();
     }
 
     @Override
@@ -99,12 +110,37 @@ public class DashScopeLlmRouter implements LlmRouterPort {
     }
 
     private String callIntent(String userInput) {
-        var resp = intentChatModel.call(new Prompt(List.of(
-                new SystemMessage(INTENT_SYSTEM),
-                new UserMessage(userInput))));
-        if (resp == null || resp.getResult() == null || resp.getResult().getOutput() == null) {
+        long started = System.currentTimeMillis();
+        try {
+            var resp = intentChatModel.call(new Prompt(List.of(
+                    new SystemMessage(INTENT_SYSTEM),
+                    new UserMessage(userInput))));
+            long latency = System.currentTimeMillis() - started;
+            if (resp == null || resp.getResult() == null || resp.getResult().getOutput() == null) {
+                recordIntent(null, null, latency, false);
+                return null;
+            }
+            recordIntent(tokensOf(resp.getMetadata() == null ? null : resp.getMetadata().getUsage(), true),
+                    tokensOf(resp.getMetadata() == null ? null : resp.getMetadata().getUsage(), false),
+                    latency, true);
+            return resp.getResult().getOutput().getText();
+        } catch (Exception e) {
+            recordIntent(null, null, System.currentTimeMillis() - started, false);
+            throw e;
+        }
+    }
+
+    private void recordIntent(Integer in, Integer out, long latency, boolean ok) {
+        if (recorder != null) {
+            recorder.record(ModelCallLogPurpose.INTENT, "dashscope", intentModelName,
+                    in, out, latency, ok, null, null, null);
+        }
+    }
+
+    private static Integer tokensOf(Usage usage, boolean prompt) {
+        if (usage == null) {
             return null;
         }
-        return resp.getResult().getOutput().getText();
+        return prompt ? usage.getPromptTokens() : usage.getCompletionTokens();
     }
 }

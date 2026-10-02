@@ -288,3 +288,27 @@ wikiagent:
     low-confidence-threshold: 0.75
     # 结构化输出校验失败后的修复重试次数
     repair-attempts: 1
+
+  # ============================================================
+  # 子项目 E：RAG / 模型治理（E2 降级链 + E3 缓存 + E4 打点成本 + E5 检索权限）
+  # ============================================================
+  llm:
+    max-attempts: 2                       # provider 单次调用重试次数
+    retry-backoff-ms: 300                 # 重试退避基数（线性）
+    circuit-failure-threshold: 3          # 连续失败熔断阈值
+    circuit-open-sec: 60                  # 熔断打开秒数
+    # 单价（元 / 1K tokens）：tokensInPrice:tokensOutPrice，未配置模型成本记 null
+    pricing:
+      qwen-flash: "0.0005:0.001"
+      qwen-plus: "0.0008:0.002"
+      qwen-max: "0.02:0.06"
+  rerank:
+    enabled: ${WIKIAGENT_RERANK_ENABLED:false}   # DashScope rerank 首批适配位，默认关闭
+    model: gte-rerank
+  cache:
+    embedding:
+      enabled: ${WIKIAGENT_CACHE_EMBEDDING_ENABLED:true}
+      ttl-seconds: 86400
+    answer:
+      enabled: ${WIKIAGENT_CACHE_ANSWER_ENABLED:false}   # 默认关闭防幻觉
+      ttl-seconds: 600
