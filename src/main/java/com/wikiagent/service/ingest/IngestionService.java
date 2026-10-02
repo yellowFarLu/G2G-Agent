@@ -7,6 +7,7 @@ import com.wikiagent.application.knowledge.KnowledgeTaggingService;
 import com.wikiagent.application.lineage.ProvenanceService;
 import com.wikiagent.application.parse.PageStructureService;
 import com.wikiagent.application.parse.RichDocumentParser;
+import com.wikiagent.application.ragcache.EmbeddingCacheService;
 import com.wikiagent.config.WikiAgentProperties;
 import com.wikiagent.domain.extract.ExtractedFieldValue;
 import com.wikiagent.domain.extract.ExtractionReport;
@@ -27,6 +28,9 @@ import com.wikiagent.service.store.MilvusStoreService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.embedding.EmbeddingModel;
+import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -67,8 +71,16 @@ public class IngestionService {
     private final MilvusStoreService milvus;
     private final EmbeddingModel embeddingModel;
     private final KnowledgeTaggingService taggingService;
+    /**
+     * 缺陷14：embedding 精确缓存（可选）。存在且 active 时批量 embed 先查缓存，
+     * 开关关闭（wikiagent.cache.embedding.enabled=false）或 Redis 缺席时由其内部 bypass 直调模型。
+     */
+    private final EmbeddingCacheService embeddingCache;
+    /** 缓存 key 中的模型名，与 DashScope embedding 配置一致。 */
+    private final String embeddingModelName;
     private final ObjectMapper objectMapper = new ObjectMapper();
 
+    /** 兼容旧装配（既有测试直接 new）：不接 embedding 缓存，裸调 embeddingModel。 */
     public IngestionService(WikiAgentProperties props, DocumentParser parser, TextCleaner cleaner,
                             RichDocumentParser richParser, PageStructureService structureService,
                             FieldExtractionService extractionService,
@@ -76,6 +88,23 @@ public class IngestionService {
                             KbDocumentRepo docRepo, KbParentChunkRepo parentRepo, KbChildChunkRepo childRepo,
                             MilvusStoreService milvus, EmbeddingModel embeddingModel,
                             KnowledgeTaggingService taggingService) {
+        this(props, parser, cleaner, richParser, structureService, extractionService, provenance,
+                artifactStore, docRepo, parentRepo, childRepo, milvus, embeddingModel,
+                taggingService, null, "text-embedding-v4");
+    }
+
+    /** 缺陷14 全量装配构造：末尾追加可选 {@link EmbeddingCacheService} 与 embedding 模型名。 */
+    @Autowired
+    public IngestionService(WikiAgentProperties props, DocumentParser parser, TextCleaner cleaner,
+                            RichDocumentParser richParser, PageStructureService structureService,
+                            FieldExtractionService extractionService,
+                            ProvenanceService provenance, ArtifactStore artifactStore,
+                            KbDocumentRepo docRepo, KbParentChunkRepo parentRepo, KbChildChunkRepo childRepo,
+                            MilvusStoreService milvus, EmbeddingModel embeddingModel,
+                            KnowledgeTaggingService taggingService,
+                            ObjectProvider<EmbeddingCacheService> embeddingCache,
+                            @Value("${spring.ai.dashscope.embedding.options.model:text-embedding-v4}")
+                            String embeddingModelName) {
         this.props = props;
         this.parser = parser;
         this.cleaner = cleaner;
@@ -90,6 +119,8 @@ public class IngestionService {
         this.milvus = milvus;
         this.embeddingModel = embeddingModel;
         this.taggingService = taggingService;
+        this.embeddingCache = embeddingCache == null ? null : embeddingCache.getIfAvailable();
+        this.embeddingModelName = embeddingModelName;
     }
 
     /** 入库结果摘要。 */
@@ -418,7 +449,11 @@ public class IngestionService {
         for (int i = 0; i < childEntities.size(); i += batch) {
             List<String> texts = childEntities.subList(i, Math.min(i + batch, childEntities.size()))
                     .stream().map(KbChildChunk::getContent).toList();
-            allVectors.addAll(embeddingModel.embed(texts));
+            // 缺陷14：先查 embedding 精确缓存（未命中批量回源并回填）；缓存服务缺席时直调模型
+            List<float[]> vectors = embeddingCache == null
+                    ? embeddingModel.embed(texts)
+                    : embeddingCache.embedAll(embeddingModelName, texts, embeddingModel::embed);
+            allVectors.addAll(vectors);
         }
 
         doc.setStatus(KbDocument.INDEXING);

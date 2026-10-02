@@ -19,8 +19,22 @@ final class CacheKeys {
         return EMB_PREFIX + model + ":" + sha256Hex(text);
     }
 
-    static String answerKey(String sessionId, String query) {
-        return ANS_PREFIX + sessionId + ":" + sha256Hex(query);
+    /**
+     * 答案缓存 key：身份（identity，无身份 anon）+ 过滤后 domain（无 domain 过滤为 all）
+     * + sessionId + query 摘要，任一段不同都不会串用缓存。
+     */
+    static String answerKey(String identity, String domain, String sessionId, String query) {
+        return ANS_PREFIX + seg(identity) + ":" + seg(domain) + ":" + seg(sessionId)
+                + ":" + sha256Hex(query);
+    }
+
+    /** key 段清洗：null/空白 → "-"；段内不允许出现 ":" 以免破坏 key 结构。 */
+    private static String seg(String raw) {
+        if (raw == null || raw.isBlank()) {
+            return "-";
+        }
+        String s = raw.replace(":", "_").trim();
+        return s.isEmpty() ? "-" : s;
     }
 
     static String answerDocKey(String docId) {

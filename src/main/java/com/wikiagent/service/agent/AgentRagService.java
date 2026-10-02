@@ -2,10 +2,12 @@ package com.wikiagent.service.agent;
 
 import com.wikiagent.application.llm.ModelCallRecorder;
 import com.wikiagent.application.prompt.PromptTemplateService;
+import com.wikiagent.application.ragcache.AnswerCacheService;
 import com.wikiagent.config.WikiAgentProperties;
 import com.wikiagent.domain.llm.ModelCallLogPurpose;
 import com.wikiagent.domain.llm.spi.ChatModelRequest;
 import com.wikiagent.domain.prompt.RenderedPrompt;
+import com.wikiagent.domain.retrieve.RetrievalSecurityContext;
 import com.wikiagent.infrastructure.llm.ChatModelProviderChain;
 import com.wikiagent.infrastructure.trace.RagTraceRecorder;
 import com.wikiagent.service.chat.ChatStreamer;
@@ -94,8 +96,13 @@ public class AgentRagService {
      * 由链负责候选切换与 model_call_log（含 fallbackFrom）；缺失时回退裸 chatModel。
      */
     private final ChatModelProviderChain chatChain;
+    /**
+     * 缺陷16：答案缓存（可选，默认关闭）。开启后 run() 入口先查缓存，命中直接回放不调模型；
+     * 证据充分生成路径用装饰 SseSender 收集答案文本并在完成时回写。
+     */
+    private final AnswerCacheService answerCache;
 
-    /** 兼容旧构造（既有测试）：不打点、不用模板、不走降级链。 */
+    /** 兼容旧构造（既有测试）：不打点、不用模板、不走降级链、不接答案缓存。 */
     public AgentRagService(WikiAgentProperties props, ChatModel chatModel, RetrievalService retrieval,
                            QueryRewriteService rewriter, ChatStreamer streamer,
                            FallbackAnswerService fallback, RagTraceRecorder traceRecorder) {
@@ -103,7 +110,7 @@ public class AgentRagService {
                 "qwen-plus");
     }
 
-    /** E1/E4 构造（兼容）：无同步降级链。 */
+    /** E1/E4 构造（兼容）：无同步降级链、无答案缓存。 */
     public AgentRagService(WikiAgentProperties props, ChatModel chatModel, RetrievalService retrieval,
                            QueryRewriteService rewriter, ChatStreamer streamer,
                            FallbackAnswerService fallback, RagTraceRecorder traceRecorder,
@@ -111,12 +118,24 @@ public class AgentRagService {
                            ObjectProvider<PromptTemplateService> templateService,
                            @Value("${wikiagent.routing.simple-model:qwen-plus}") String chatModelName) {
         this(props, chatModel, retrieval, rewriter, streamer, fallback, traceRecorder,
-                callRecorder, templateService, chatModelName, null);
+                callRecorder, templateService, chatModelName, null, null);
+    }
+
+    /** 缺陷1 构造（兼容）：有同步降级链，无答案缓存。 */
+    public AgentRagService(WikiAgentProperties props, ChatModel chatModel, RetrievalService retrieval,
+                           QueryRewriteService rewriter, ChatStreamer streamer,
+                           FallbackAnswerService fallback, RagTraceRecorder traceRecorder,
+                           ObjectProvider<ModelCallRecorder> callRecorder,
+                           ObjectProvider<PromptTemplateService> templateService,
+                           @Value("${wikiagent.routing.simple-model:qwen-plus}") String chatModelName,
+                           ObjectProvider<ChatModelProviderChain> chatChain) {
+        this(props, chatModel, retrieval, rewriter, streamer, fallback, traceRecorder,
+                callRecorder, templateService, chatModelName, chatChain, null);
     }
 
     /**
-     * 缺陷1 全量装配构造：新增可选 {@link ChatModelProviderChain}（ObjectProvider 包装，
-     * 无 Bean 时回退裸 chatModel 路径）。
+     * 缺陷1/16 全量装配构造：可选 {@link ChatModelProviderChain} 与
+     * {@link AnswerCacheService}（ObjectProvider 包装，Bean 缺席时回退旧路径）。
      */
     @org.springframework.beans.factory.annotation.Autowired
     public AgentRagService(WikiAgentProperties props, ChatModel chatModel, RetrievalService retrieval,
@@ -125,7 +144,8 @@ public class AgentRagService {
                            ObjectProvider<ModelCallRecorder> callRecorder,
                            ObjectProvider<PromptTemplateService> templateService,
                            @Value("${wikiagent.routing.simple-model:qwen-plus}") String chatModelName,
-                           ObjectProvider<ChatModelProviderChain> chatChain) {
+                           ObjectProvider<ChatModelProviderChain> chatChain,
+                           ObjectProvider<AnswerCacheService> answerCache) {
         this.props = props;
         this.chatModel = chatModel;
         this.retrieval = retrieval;
@@ -137,6 +157,7 @@ public class AgentRagService {
         this.templateService = templateService == null ? null : templateService.getIfAvailable();
         this.chatModelName = chatModelName;
         this.chatChain = chatChain == null ? null : chatChain.getIfAvailable();
+        this.answerCache = answerCache == null ? null : answerCache.getIfAvailable();
     }
 
     /** 路由+规划的决策结果。 */
@@ -147,9 +168,44 @@ public class AgentRagService {
     record Grade(boolean sufficient, String refinedQuery) {
     }
 
+    /**
+     * 缺陷16：chat 路径不带 domain 过滤表达式（检索侧只有 identity 门控），
+     * 答案缓存 key 的 domain 段恒为 all；未来支持按 domain 过滤问答时在此透传。
+     */
+    static final String ANSWER_CACHE_DOMAIN_ALL = "all";
+
+    /** 缺陷16：缓存身份段——优先业务身份头，其次 userId，匿名请求为 anon。 */
+    private static String cacheIdentity(String userId) {
+        String identity = RetrievalSecurityContext.currentIdentity();
+        if (identity != null && !identity.isBlank()) {
+            return identity;
+        }
+        if (userId != null && !userId.isBlank()) {
+            return userId;
+        }
+        return "anon";
+    }
+
     /** 运行完整的 Agentic RAG 流程。异常向上抛出，由 ChatService 统一转 error 事件。 */
     public void run(String userId, String sessionId, String question, SseSender sse) {
         int maxRounds = Math.max(1, props.agent().maxRounds());
+        String identity = cacheIdentity(userId);
+
+        // 缺陷16：答案缓存读路径（默认关闭）。命中则原样回放答案，跳过路由/检索/评估/生成，
+        // 不调用任何模型；身份/domain/session/query 任一不同 key 即不同
+        if (answerCache != null && answerCache.active()) {
+            AnswerCacheService.CacheItem cached = answerCache.get(
+                    identity, ANSWER_CACHE_DOMAIN_ALL, sessionId, question);
+            if (cached != null) {
+                log.info("答案缓存命中 identity={} sessionId={} sourceCount={}",
+                        identity, sessionId, cached.sourceCount());
+                sse.send("stage", Map.of("stage", "generating", "cache", "hit"));
+                sse.send("delta", Map.of("text", cached.answer()));
+                sse.send("done", Map.of());
+                sse.complete();
+                return;
+            }
+        }
 
         // 1. 路由 + 查询规划（失败降级为单查询检索）
         sse.send("stage", Map.of("stage", "routing"));
@@ -249,9 +305,65 @@ public class AgentRagService {
                 question, "sources=" + result.sources().size() + ", prompt=" + promptRef,
                 "OK", null);
         sse.send("stage", Map.of("stage", "generating"));
+        // 缺陷16：答案缓存写路径——装饰 SseSender 累积 delta，正常完成后按 identity/domain/
+        // session/query 回写（含 ansdoc 反向索引）；生成出错或空答案不缓存
+        SseSender generateSse = answerCache != null && answerCache.active()
+                ? new AnswerCacheWritingSender(sse, answerCache, identity,
+                        ANSWER_CACHE_DOMAIN_ALL, sessionId, question, result)
+                : sse;
         streamer.stream(new Prompt(List.of(
                 new SystemMessage(sys.content()),
-                new UserMessage(usr.content()))), sse, null, userId, sessionId);
+                new UserMessage(usr.content()))), generateSse, null, userId, sessionId);
+    }
+
+    /**
+     * 缺陷16：答案缓存回写 SSE 装饰器。逐字转发，累积 delta 文本；
+     * 流正常 complete 且收集到非空文本时回写缓存，error 路径不缓存。
+     */
+    private static final class AnswerCacheWritingSender extends SseSender {
+        private final SseSender delegate;
+        private final AnswerCacheService cache;
+        private final String identity;
+        private final String domain;
+        private final String sessionId;
+        private final String question;
+        private final RetrievalService.RetrievalResult result;
+        private final StringBuilder answer = new StringBuilder();
+        private boolean failed;
+
+        AnswerCacheWritingSender(SseSender delegate, AnswerCacheService cache, String identity,
+                                 String domain, String sessionId, String question,
+                                 RetrievalService.RetrievalResult result) {
+            this.delegate = delegate;
+            this.cache = cache;
+            this.identity = identity;
+            this.domain = domain;
+            this.sessionId = sessionId;
+            this.question = question;
+            this.result = result;
+        }
+
+        @Override
+        public boolean send(String event, Object data) {
+            if ("delta".equals(event) && data instanceof Map<?, ?> map && map.get("text") != null) {
+                answer.append(String.valueOf(map.get("text")));
+            }
+            if ("error".equals(event)) {
+                failed = true;
+            }
+            return delegate.send(event, data);
+        }
+
+        @Override
+        public void complete() {
+            try {
+                if (!failed && answer.length() > 0) {
+                    cache.put(identity, domain, sessionId, question, result, answer.toString());
+                }
+            } finally {
+                delegate.complete();
+            }
+        }
     }
 
     /** 缺陷13：提示词版本引用串，如 {@code chat.system@v3}；未命中模板（version=-1）标 @fallback。 */
