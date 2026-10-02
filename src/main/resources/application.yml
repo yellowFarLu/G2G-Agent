@@ -74,6 +74,14 @@ management:
     web:
       exposure:
         include: health,info,metrics,prometheus
+  defaults:
+    metrics:
+      export:
+        enabled: true            # 显式开启（部分环境默认被关闭）
+  prometheus:
+    metrics:
+      export:
+        enabled: true            # prometheus 导出显式开启
   metrics:
     tags:
       application: wiki-agent

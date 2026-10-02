@@ -32,6 +32,7 @@ public class CircuitBreakerRegistry {
     /** 上一轮快照，用于检测 CLOSED→OPEN 跳变并打时间戳。 */
     private final Map<String, CircuitState> previous = new ConcurrentHashMap<>();
 
+    @org.springframework.beans.factory.annotation.Autowired
     public CircuitBreakerRegistry(List<CircuitStateSupplier> suppliers) {
         for (String component : CircuitComponents.ALL) {
             previous.put(component, CircuitState.CLOSED);

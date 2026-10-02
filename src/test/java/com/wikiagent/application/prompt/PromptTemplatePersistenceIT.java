@@ -51,8 +51,10 @@ class PromptTemplatePersistenceIT {
 
     @Test
     void modelCallLogRoundTrip() {
+        // H2 文件库跨运行持久：traceId 必须唯一，避免残留行干扰断言
+        String traceId = "trace-it-" + System.nanoTime();
         ModelCallLog saved = callLogRepo.save(ModelCallLog.builder()
-                .traceId("trace-it")
+                .traceId(traceId)
                 .userId("u1")
                 .sessionId("s1")
                 .purpose(ModelCallLogPurpose.CHAT)
@@ -64,7 +66,7 @@ class PromptTemplatePersistenceIT {
                 .status(ModelCallLog.Status.OK)
                 .build());
         assertThat(saved.id()).isNotNull();
-        assertThat(callLogRepo.findByTraceId("trace-it")).hasSize(1);
+        assertThat(callLogRepo.findByTraceId(traceId)).hasSize(1);
         assertThat(callLogRepo.count()).isGreaterThanOrEqualTo(1);
     }
 }
