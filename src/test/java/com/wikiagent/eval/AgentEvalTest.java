@@ -11,6 +11,8 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.mock.mockito.MockBean;
 import org.springframework.core.io.ClassPathResource;
+import org.springframework.test.context.DynamicPropertyRegistry;
+import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.test.context.TestPropertySource;
 
 import java.io.InputStream;
@@ -38,6 +40,14 @@ import static org.mockito.Mockito.when;
     "spring.jpa.hibernate.ddl-auto=update"
 })
 class AgentEvalTest {
+
+    /** 独立 H2 文件（flyway 关闭的上下文不得污染默认库，否则后续 flyway 迁移会因列已存在而失败）。 */
+    @DynamicPropertySource
+    static void datasource(DynamicPropertyRegistry registry) {
+        registry.add("spring.datasource.url", () ->
+                "jdbc:h2:file:./data/h2/test-agent-eval-" + System.nanoTime()
+                        + ";AUTO_SERVER=TRUE;MODE=MySQL");
+    }
 
     /** 黄金用例 JSON 结构。 */
     record GoldenCase(String question, String expectedIntent, String expectedModel, String groundTruth) {}

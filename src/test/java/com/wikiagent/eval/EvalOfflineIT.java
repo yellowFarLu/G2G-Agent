@@ -15,6 +15,8 @@ import com.wikiagent.domain.eval.metrics.CitationCorrectCalculator;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.test.context.DynamicPropertyRegistry;
+import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.test.context.TestPropertySource;
 
 import java.io.IOException;
@@ -42,6 +44,14 @@ import static org.assertj.core.data.Offset.offset;
         "wikiagent.eval.enabled=true"
 })
 class EvalOfflineIT {
+
+    /** 独立 H2 文件（flyway 关闭的上下文不得污染默认库，否则后续 flyway 迁移会因列已存在而失败）。 */
+    @DynamicPropertySource
+    static void datasource(DynamicPropertyRegistry registry) {
+        registry.add("spring.datasource.url", () ->
+                "jdbc:h2:file:./data/h2/test-eval-offline-" + System.nanoTime()
+                        + ";AUTO_SERVER=TRUE;MODE=MySQL");
+    }
 
     @Autowired
     private EvalRunner runner;
