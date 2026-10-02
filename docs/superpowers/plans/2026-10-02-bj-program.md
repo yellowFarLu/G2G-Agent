@@ -153,3 +153,17 @@
 | G-8 | AC-G1 | P3 | e2e 未断言 SSE 驱动进度数值 | 快照 RUNNING/30 → SSE→100 → done 终态断言 | CLOSED |
 | - | - | - | e2e 自发现缺陷：ReviewCasesTab 对 Long id 调 slice | #{id} 渲染 | CLOSED（e2e 先行捕获） |
 备注：本机无 Docker 且无 LLM key，AC-G1 全链路 e2e 用 Playwright route mock 后端跑通；real-backend.spec.ts 冒烟用例在 E2E_REAL_BACKEND=1 + 本地 8080 后端时启用；CI frontend job 用官方 chromium（PW_CHROMIUM=1）跑 mock e2e。本机 Chromium 下载受限，本地用系统 Chrome（channel=chrome）。
+
+---
+
+## 需求全量审计缺口修复登记（2026-10-03）
+
+对照 `docs/1001-需求.txt` 16 条原始需求全量审计，13 条完整实现，3 条局部缺口，逐个修复：
+
+| # | 缺口 | 影响需求 | 修复内容 | 提交 | 状态 |
+|---|---|---|---|---|---|
+| 缺口③ | rerank prod 默认关闭（DashScope 实装但 enabled 默认 false） | 4 | `application.yml`/`application-prod.yaml` 默认 true（无 Key 自动跳过、失败保序降级语义不变），ProdProfileLoadTest 与开关登记文档同步 | be5cea6 | CLOSED |
+| 缺口② | PERO v6 默认路径 ToolExecutor 仅有 StubToolExecutor（pero.enabled 默认 true，ReAct 工具调用全返回 [STUB]） | 5 | 新增 PeroToolExecutor 真实分派 5 个工具；StubToolExecutor 收窄到 pero.enabled=false；5 个工具类解除 v1-v2 门控双路径共用；PeroToolExecutorTest 12 用例 | 8004f8d | CLOSED |
+| 缺口① | 灰度发布未实现（spec §J 曾显式排除） | 10、15 | GrayReleaseService（SHA-256 稳定分桶 + denylist>allowlist>percent + 未配置不门控 + Micrometer 打点）；首个决策点 rerank 门控（键为 RetrievalSecurityContext 身份）；application.yml 配置块 + feature-toggles.md §六；评测链路显式不接灰度 | 063da66 | CLOSED |
+
+修复后需求覆盖：16/16 全量实现。
