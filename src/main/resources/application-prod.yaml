@@ -103,7 +103,7 @@ wikiagent:
 
   # ------------------------------------------------------------
   # 任务框架 / MQ：生产 RocketMQ（nameServer 经 ROCKETMQ_NAME_SERVER 环境变量注入，
-  # 见 docs/operations/environments.md 必需变量清单）
+  # 见 docs/operations/feature-toggles.md 必需变量清单）
   # ------------------------------------------------------------
   task:
     enabled: ${WIKIAGENT_TASK_ENABLED:true}
@@ -139,8 +139,9 @@ wikiagent:
         email: mask
         id-card: mask
         bank-card: mask
-    # 限流契约（I3 令牌桶消费此配置；阈值部署变量可调，超限 429+审计）
-    rate-limit:
-      enabled: ${WIKIAGENT_RATE_LIMIT_ENABLED:true}
-      per-user-per-minute: ${WIKIAGENT_RATE_LIMIT_USER_PER_MINUTE:60}
-      per-tenant-per-minute: ${WIKIAGENT_RATE_LIMIT_TENANT_PER_MINUTE:600}
+  # 限流契约（I3 令牌桶消费 wikiagent.ratelimit；复合键 tenant:user 单桶，超限 429+审计。
+  # 独立双档（用户/租户分桶）未实现，勿新增死配置）
+  ratelimit:
+    enabled: ${WIKIAGENT_RATELIMIT_ENABLED:true}
+    requests-per-minute: ${WIKIAGENT_RATELIMIT_PER_MINUTE:60}
+    backpressure-retry-after-sec: ${WIKIAGENT_RATELIMIT_RETRY_AFTER_SEC:5}

@@ -166,13 +166,23 @@ class TracePropagationIT {
     }
 
     @Test
-    void chat端点响应头回写traceId_J异步接线前的协作面() throws Exception {
-        // ChatService 异步线程的 MDC 包裹由 J 代理实施；此处锁定入口契约：响应必带头
-        mvc.perform(post("/api/chat")
+    void chat端点响应头回写traceId且agent_trace按同traceId落行() throws Exception {
+        // ChatService 在 @Async 边界前捕获 MDC 快照并在工作线程恢复（J 接线后），
+        // RagTraceRecorder 持久化 agent_trace 时从 MDC 取 traceId（V16 列）
+        MvcResult result = mvc.perform(post("/api/chat")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"question\":\"你好\"}"))
                 .andExpect(status().isOk())
-                .andExpect(header().string("X-Trace-Id", org.hamcrest.Matchers.startsWith("tr-")));
+                .andExpect(header().string("X-Trace-Id", org.hamcrest.Matchers.startsWith("tr-")))
+                .andReturn();
+        String traceId = result.getResponse().getHeader("X-Trace-Id");
+
+        // 异步处理落 span：轮询 agent_trace 直到出现同 traceId 行
+        await(() -> {
+            Integer rows = jdbc.queryForObject(
+                    "select count(*) from agent_trace where trace_id = ?", Integer.class, traceId);
+            return rows != null && rows > 0;
+        }, 15_000);
     }
 
     /** 上游 traceId 头透传：外部网关注入的 traceId 原样进入任务链路。 */
