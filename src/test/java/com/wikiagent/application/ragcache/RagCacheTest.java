@@ -115,7 +115,7 @@ class RagCacheTest {
         AnswerCacheService svc = new AnswerCacheService(providerOf(fake.redis), true, 60);
 
         RetrievalService.RetrievalResult rr = new RetrievalService.RetrievalResult(
-                List.of(new RetrievalService.Source(1, "d1", "f.md", 0.9)), "上下文");
+                List.of(new RetrievalService.Source(1, "d1", 1, 3, "片段", null, 0.9, "f.md")), "上下文");
         svc.put("s1", "问题", rr, "答案");
         AnswerCacheService.CacheItem hit = svc.get("s1", "问题");
         assertNotNull(hit);

@@ -51,7 +51,20 @@ public class RetrievalService {
     /** 本地降级：每个查询最多抽取的 bigram/关键词数量。 */
     private static final int FALLBACK_MAX_TERMS = 12;
 
-    public record Source(int index, String docId, String filename, double score) {
+    /**
+     * 引用来源（§2.5 六字段 + filename）。
+     * <ul>
+     *   <li>{@code versionNo}/{@code pageNo}：取该父块代表子块（父块下最高分、平局取 childIndex 小者）
+     *       的实体值；代表子块行缺失时 versionNo=0、pageNo=null</li>
+     *   <li>{@code snippet}：代表子块 content 去空白后前 200 字符</li>
+     *   <li>{@code artifactId}：预留字段（恒 null）。kb_child_chunk 表无该列，
+     *       未来可由 knowledge_metadata.artifact_id 回填</li>
+     *   <li>{@code filename}：保留在末尾，JSON 仍含 filename 以兼容现有前端</li>
+     * </ul>
+     * 序列化 JSON 字段名保持驼峰（index/docId/versionNo/pageNo/snippet/artifactId/score/filename）。
+     */
+    public record Source(int index, String docId, int versionNo, Integer pageNo, String snippet,
+                         String artifactId, double score, String filename) {
     }
 
     /** context 为空表示知识库中没有检索到相关内容。 */
@@ -63,12 +76,35 @@ public class RetrievalService {
         private final LinkedHashSet<String> parentOrder = new LinkedHashSet<>();
         private final Map<String, Double> bestScore = new HashMap<>();
         private final Map<String, String> parentDoc = new HashMap<>();
+        /** 每个父块的代表子块（§2.5：同父块得分最高；平局取 childIndex 小者）。 */
+        private final Map<String, RepChild> repChild = new HashMap<>();
 
-        /** 测试辅助：直接放入一条命中（同包可见）。 */
+        /** 代表子块引用：childId + childIndex + 该子块自身命中分。 */
+        record RepChild(String childId, int childIndex, double score) {
+        }
+
+        /** 测试辅助：直接放入一条命中（同包可见，无代表子块，引用六字段回退默认值）。 */
         void put(String parentId, String docId, double score) {
             parentOrder.add(parentId);
             bestScore.merge(parentId, score, Math::max);
             parentDoc.putIfAbsent(parentId, docId);
+        }
+
+        /** 累积一条带子块的命中，并维护父块代表子块。 */
+        void put(String parentId, String docId, String childId, int childIndex, double score) {
+            put(parentId, docId, score);
+            noteChild(parentId, childId, childIndex, score);
+        }
+
+        /** 按"得分最高、平局 childIndex 最小"更新代表子块。 */
+        void noteChild(String parentId, String childId, int childIndex, double score) {
+            if (childId == null) {
+                return;
+            }
+            RepChild cur = repChild.get(parentId);
+            if (cur == null || score > cur.score() || (score == cur.score() && childIndex < cur.childIndex())) {
+                repChild.put(parentId, new RepChild(childId, childIndex, score));
+            }
         }
     }
 
@@ -249,9 +285,8 @@ public class RetrievalService {
                         pushdownExpr);
                 hits = filterHitsByMetadata(hits, effective);
                 for (MilvusStoreService.Hit h : hits) {
-                    acc.parentOrder.add(h.parentId());
-                    acc.bestScore.merge(h.parentId(), h.score(), Math::max);
-                    acc.parentDoc.putIfAbsent(h.parentId(), h.docId());
+                    // §2.5：累积命中同时记录父块代表子块（最高分、平局 childIndex 小者）
+                    acc.put(h.parentId(), h.docId(), h.childId(), h.childIndex(), h.score());
                 }
             } catch (Exception e) {
                 // Milvus 不可用时降级为 DB 关键词检索（开发零依赖 / 生产故障兜底），冷却期内不再尝试 Milvus
@@ -350,9 +385,8 @@ public class RetrievalService {
                 .forEach(e -> {
                     KbChildChunk c = e.getKey();
                     double score = (double) e.getValue() / terms.size(); // 命中词占比，0~1
-                    acc.parentOrder.add(c.getParentId());
-                    acc.bestScore.merge(c.getParentId(), score, Math::max);
-                    acc.parentDoc.putIfAbsent(c.getParentId(), c.getDocId());
+                    // §2.5：本地降级路径同样记录代表子块，保证引用六字段两条路径一致
+                    acc.put(c.getParentId(), c.getDocId(), c.getId(), c.getChildIndex(), score);
                 });
     }
 
@@ -474,6 +508,15 @@ public class RetrievalService {
             docNames.put(d.getId(), d.getFilename());
         }
 
+        // §2.5：批量回查每个父块的代表子块，取 versionNo/pageNo/snippet
+        Map<String, KbChildChunk> repChildren = new HashMap<>();
+        if (!acc.repChild.isEmpty()) {
+            for (KbChildChunk c : childRepo.findByIdIn(
+                    acc.repChild.values().stream().map(Accumulator.RepChild::childId).toList())) {
+                repChildren.put(c.getId(), c);
+            }
+        }
+
         int budget = props.retrieve().parentCharBudget();
         StringBuilder ctx = new StringBuilder();
         List<Source> sources = new ArrayList<>();
@@ -496,9 +539,28 @@ public class RetrievalService {
             ctx.append('[').append(idx).append("] 来源: ").append(filename).append('\n')
                     .append(content).append("\n\n");
             used += content.length();
-            sources.add(new Source(idx, p.getDocId(), filename, acc.bestScore.getOrDefault(parentId, 0.0)));
+            Accumulator.RepChild rc = acc.repChild.get(parentId);
+            KbChildChunk child = rc == null ? null : repChildren.get(rc.childId());
+            sources.add(new Source(idx, p.getDocId(),
+                    child != null ? child.getVersionNo() : 0,
+                    child != null ? child.getPageNo() : null,
+                    snippetOf(child == null ? null : child.getContent()),
+                    null, // artifactId 预留：kb_child_chunk 无该列，后续由 knowledge_metadata 回填
+                    acc.bestScore.getOrDefault(parentId, 0.0), filename));
             idx++;
         }
         return new RetrievalResult(sources, ctx.toString());
+    }
+
+    /** §2.5：引用片段 = 子块原文去空白后前 200 字符；子块缺失/空时为 null。 */
+    private static String snippetOf(String childContent) {
+        if (childContent == null) {
+            return null;
+        }
+        String s = childContent.strip();
+        if (s.isEmpty()) {
+            return null;
+        }
+        return s.length() > 200 ? s.substring(0, 200) : s;
     }
 }

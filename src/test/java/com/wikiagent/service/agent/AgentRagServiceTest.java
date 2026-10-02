@@ -80,7 +80,7 @@ class AgentRagServiceTest {
     private static RetrievalService.RetrievalResult result(String context) {
         return new RetrievalService.RetrievalResult(
                 context.isEmpty() ? List.of()
-                        : List.of(new RetrievalService.Source(1, "doc1", "a.md", 0.9)),
+                        : List.of(new RetrievalService.Source(1, "doc1", 1, null, "片段", null, 0.9, "a.md")),
                 context);
     }
 
