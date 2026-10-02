@@ -76,11 +76,11 @@
 - TR：100 次确定性重算一致测试；零 LLM 调用断言；三类处置留痕测试；材料对照差异造数测试
 
 ### E（AC-E1..E5）
-- [ ] E1 V12 prompt_template/model_call_log 表；PromptTemplateService（key+version+ACTIVE 渲染，PromptComposer 接线）
-- [ ] E2 ChatModelProvider SPI + DashScope 适配（包装既有工厂）；结构化输出/超时/重试/降级链；RerankProvider SPI + DashScope rerank
-- [ ] E3 Redis 缓存（embedding 精确缓存 + 答案缓存策略，开关/TTL/bypass）
-- [ ] E4 model_call_log 全链路打点（INTENT/EXTRACT/CHAT/RERANK/JUDGE，含 token/成本/耗时/fallbackFrom）+ 单价配置
-- [ ] E5 检索权限：domain/subDomain/identity 表达式下推 Milvus；引用契约 §2.5（pageNo/snippet/versionNo）
+- [x] E1 V12 prompt_template/model_call_log 表；PromptTemplateService（key+version+ACTIVE 渲染，PromptComposer 接线）
+- [x] E2 ChatModelProvider SPI + DashScope 适配（包装既有工厂）；结构化输出/超时/重试/降级链；RerankProvider SPI + DashScope rerank
+- [x] E3 Redis 缓存（embedding 精确缓存 + 答案缓存策略，开关/TTL/bypass）
+- [x] E4 model_call_log 全链路打点（INTENT/EXTRACT/CHAT/RERANK/JUDGE，含 token/成本/耗时/fallbackFrom）+ 单价配置
+- [x] E5 检索权限：domain/subDomain/identity 表达式下推 Milvus；引用契约 §2.5（pageNo/snippet/versionNo）
 - [ ] E6 知识更新/删除：版本化重建索引、软删传播到检索；冲突决议与版本联动
 - TR：越权 domain 隔离 IT；provider 降级桩测试；缓存命中/失效测试；引用完整性测试；打点计数测试
 
