@@ -8,6 +8,9 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.web.HttpMediaTypeNotSupportedException;
+import org.springframework.web.HttpRequestMethodNotSupportedException;
+import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.web.multipart.MaxUploadSizeExceededException;
 
 import java.time.Instant;
@@ -56,6 +59,21 @@ public class GlobalExceptionHandler {
         // 如 Milvus 不可用等运行环境问题
         log.warn("运行环境异常: {}", e.getMessage());
         return build(HttpStatus.SERVICE_UNAVAILABLE, e.getMessage());
+    }
+
+    @ExceptionHandler(HttpRequestMethodNotSupportedException.class)
+    public ResponseEntity<ApiError> methodNotSupported(HttpRequestMethodNotSupportedException e) {
+        return build(HttpStatus.METHOD_NOT_ALLOWED, e.getMessage());
+    }
+
+    @ExceptionHandler(HttpMediaTypeNotSupportedException.class)
+    public ResponseEntity<ApiError> mediaTypeNotSupported(HttpMediaTypeNotSupportedException e) {
+        return build(HttpStatus.UNSUPPORTED_MEDIA_TYPE, e.getMessage());
+    }
+
+    @ExceptionHandler(HttpMessageNotReadableException.class)
+    public ResponseEntity<ApiError> notReadable(HttpMessageNotReadableException e) {
+        return build(HttpStatus.BAD_REQUEST, "请求体不是合法 JSON");
     }
 
     @ExceptionHandler(Exception.class)
