@@ -1,5 +1,6 @@
 package com.wikiagent.web;
 
+import com.wikiagent.dto.ConflictException;
 import com.wikiagent.dto.NotFoundException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -23,6 +24,21 @@ public class GlobalExceptionHandler {
     @ExceptionHandler(IllegalArgumentException.class)
     public ResponseEntity<ApiError> badRequest(IllegalArgumentException e) {
         return build(HttpStatus.BAD_REQUEST, e.getMessage());
+    }
+
+    @ExceptionHandler(com.wikiagent.application.task.OptimisticControlConflictException.class)
+    public ResponseEntity<ApiError> optimisticConflict(com.wikiagent.application.task.OptimisticControlConflictException e) {
+        return build(HttpStatus.CONFLICT, e.getMessage());
+    }
+
+    @ExceptionHandler(com.wikiagent.domain.task.IllegalStateTransitionException.class)
+    public ResponseEntity<ApiError> illegalTransition(com.wikiagent.domain.task.IllegalStateTransitionException e) {
+        return build(HttpStatus.CONFLICT, e.getMessage());
+    }
+
+    @ExceptionHandler(ConflictException.class)
+    public ResponseEntity<ApiError> conflict(ConflictException e) {
+        return build(HttpStatus.CONFLICT, e.getMessage());
     }
 
     @ExceptionHandler(MaxUploadSizeExceededException.class)

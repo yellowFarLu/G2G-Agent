@@ -1,0 +1,6 @@
+{
+  "steps": [
+    {"op": "regex", "params": {"field": "invoiceNo", "pattern": "\\d{8}-\\d{2}"}, "to": "invoiceNoValid"}
+  ],
+  "outputs": ["invoiceNoValid"]
+}

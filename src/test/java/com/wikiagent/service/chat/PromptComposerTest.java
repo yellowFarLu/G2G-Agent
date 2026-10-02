@@ -1,9 +1,17 @@
 package com.wikiagent.service.chat;
 
+import com.wikiagent.application.prompt.PromptTemplateService;
+import com.wikiagent.domain.prompt.PromptTemplate;
+import com.wikiagent.domain.prompt.RenderedPrompt;
 import org.junit.jupiter.api.Test;
+
+import java.util.Map;
+import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 class PromptComposerTest {
 
@@ -32,5 +40,51 @@ class PromptComposerTest {
         // 内容直接拼接而非模板渲染，{value} 不应被当作占位符替换
         assertTrue(user.contains("{\"key\": \"{value}\"}"));
         assertEquals(-1, user.indexOf("Placeholder"), "不应出现占位符渲染痕迹");
+    }
+
+    @Test
+    void 模板感知系统提示词命中模板返回渲染结果() {
+        PromptTemplateService svc = mock(PromptTemplateService.class);
+        when(svc.render("chat.system", Map.of()))
+                .thenReturn(Optional.of(new RenderedPrompt("模板系统提示", 2)));
+
+        RenderedPrompt rp = PromptComposer.systemPrompt(svc);
+        assertEquals("模板系统提示", rp.content());
+        assertEquals(2, rp.version());
+    }
+
+    @Test
+    void 模板感知系统提示词未命中模板回退静态常量() {
+        PromptTemplateService svc = mock(PromptTemplateService.class);
+        when(svc.render("chat.system", Map.of())).thenReturn(Optional.empty());
+
+        RenderedPrompt rp = PromptComposer.systemPrompt(svc);
+        assertEquals(PromptComposer.SYSTEM, rp.content());
+        assertEquals(-1, rp.version());
+    }
+
+    @Test
+    void 模板感知用户提示词命中模板渲染占位符() {
+        PromptTemplateService svc = mock(PromptTemplateService.class);
+        String tmpl = "参考资料：ctx\n\n问题：qst\n请回答。";
+        when(svc.render("chat.user", Map.of("context", "ctx", "question", "qst")))
+                .thenReturn(Optional.of(new RenderedPrompt(tmpl, 3)));
+
+        RenderedPrompt rp = PromptComposer.userPrompt(svc, "ctx", "qst");
+        assertTrue(rp.content().contains("ctx"));
+        assertTrue(rp.content().contains("qst"));
+        assertEquals(3, rp.version());
+    }
+
+    @Test
+    void 模板感知用户提示词未命中模板回退静态拼接() {
+        PromptTemplateService svc = mock(PromptTemplateService.class);
+        when(svc.render("chat.user", Map.of("context", "ctx", "question", "qst")))
+                .thenReturn(Optional.empty());
+
+        RenderedPrompt rp = PromptComposer.userPrompt(svc, "ctx", "qst");
+        String expected = PromptComposer.user("ctx", "qst");
+        assertEquals(expected, rp.content());
+        assertEquals(-1, rp.version());
     }
 }

@@ -13,8 +13,8 @@ CREATE TABLE IF NOT EXISTS kb_feedback (
     created_at      TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
-CREATE INDEX IF NOT EXISTS idx_feedback_chunk ON kb_feedback (chunk_id);
-CREATE INDEX IF NOT EXISTS idx_feedback_session ON kb_feedback (session_id);
+CREATE INDEX idx_feedback_chunk ON kb_feedback (chunk_id);
+CREATE INDEX idx_feedback_session ON kb_feedback (session_id);
 
 -- 知识使用指标事件（每次知识被检索/引用时记录一条）
 CREATE TABLE IF NOT EXISTS metric_event (
@@ -27,9 +27,9 @@ CREATE TABLE IF NOT EXISTS metric_event (
     created_at      TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
-CREATE INDEX IF NOT EXISTS idx_metric_chunk ON metric_event (chunk_id);
-CREATE INDEX IF NOT EXISTS idx_metric_type ON metric_event (event_type);
-CREATE INDEX IF NOT EXISTS idx_metric_time ON metric_event (created_at);
+CREATE INDEX idx_metric_chunk ON metric_event (chunk_id);
+CREATE INDEX idx_metric_type ON metric_event (event_type);
+CREATE INDEX idx_metric_time ON metric_event (created_at);
 
 -- 知识指标聚合结果（§6.6.2.4 看板查询用）
 CREATE TABLE IF NOT EXISTS knowledge_metric (

@@ -1,0 +1,6 @@
+{
+  "steps": [
+    {"op": "enum", "params": {"field": "currency", "allowed": ["CNY", "USD", "EUR"]}, "to": "currencyValid"}
+  ],
+  "outputs": ["currencyValid"]
+}

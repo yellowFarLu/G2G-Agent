@@ -18,6 +18,11 @@ public class SseSender {
         this.emitter = emitter;
     }
 
+    /** 仅供装饰器子类使用（如答案缓存回写包装）：自身不持有 emitter，全部方法由子类覆写委托。 */
+    protected SseSender() {
+        this.emitter = null;
+    }
+
     /** 返回 false 表示客户端已断开等发送失败。 */
     public boolean send(String event, Object data) {
         try {

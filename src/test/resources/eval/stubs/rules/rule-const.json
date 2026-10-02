@@ -1,0 +1,6 @@
+{
+  "steps": [
+    {"op": "const", "params": {"value": "CNY"}, "to": "currency"}
+  ],
+  "outputs": ["currency"]
+}

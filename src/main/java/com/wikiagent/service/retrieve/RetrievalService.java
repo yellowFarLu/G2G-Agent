@@ -1,9 +1,20 @@
 package com.wikiagent.service.retrieve;
 
+import com.wikiagent.application.gray.GrayReleaseService;
+import com.wikiagent.application.llm.ModelCallRecorder;
 import com.wikiagent.config.WikiAgentProperties;
+import com.wikiagent.domain.llm.ModelCallLogPurpose;
+import com.wikiagent.domain.llm.spi.RerankProvider;
+import com.wikiagent.domain.llm.spi.RerankRequest;
+import com.wikiagent.domain.llm.spi.RerankResult;
+import com.wikiagent.domain.retrieve.RetrievalFilter;
+import com.wikiagent.domain.retrieve.RetrievalQuery;
+import com.wikiagent.domain.retrieve.RetrievalSecurityContext;
 import com.wikiagent.entity.KbChildChunk;
 import com.wikiagent.entity.KbDocument;
 import com.wikiagent.entity.KbParentChunk;
+import com.wikiagent.infrastructure.persistence.KnowledgeMetadataEntity;
+import com.wikiagent.infrastructure.persistence.KnowledgeMetadataJpaDao;
 import com.wikiagent.infrastructure.persistence.MetricEventEntity;
 import com.wikiagent.infrastructure.persistence.MetricEventJpaDao;
 import com.wikiagent.repo.KbChildChunkRepo;
@@ -41,7 +52,20 @@ public class RetrievalService {
     /** 本地降级：每个查询最多抽取的 bigram/关键词数量。 */
     private static final int FALLBACK_MAX_TERMS = 12;
 
-    public record Source(int index, String docId, String filename, double score) {
+    /**
+     * 引用来源（§2.5 六字段 + filename）。
+     * <ul>
+     *   <li>{@code versionNo}/{@code pageNo}：取该父块代表子块（父块下最高分、平局取 childIndex 小者）
+     *       的实体值；代表子块行缺失时 versionNo=0、pageNo=null</li>
+     *   <li>{@code snippet}：代表子块 content 去空白后前 200 字符</li>
+     *   <li>{@code artifactId}：由 knowledge_metadata.artifact_id（V11）按代表子块回填；
+     *       未打标的公共知识为 null</li>
+     *   <li>{@code filename}：保留在末尾，JSON 仍含 filename 以兼容现有前端</li>
+     * </ul>
+     * 序列化 JSON 字段名保持驼峰（index/docId/versionNo/pageNo/snippet/artifactId/score/filename）。
+     */
+    public record Source(int index, String docId, int versionNo, Integer pageNo, String snippet,
+                         String artifactId, double score, String filename) {
     }
 
     /** context 为空表示知识库中没有检索到相关内容。 */
@@ -53,6 +77,36 @@ public class RetrievalService {
         private final LinkedHashSet<String> parentOrder = new LinkedHashSet<>();
         private final Map<String, Double> bestScore = new HashMap<>();
         private final Map<String, String> parentDoc = new HashMap<>();
+        /** 每个父块的代表子块（§2.5：同父块得分最高；平局取 childIndex 小者）。 */
+        private final Map<String, RepChild> repChild = new HashMap<>();
+
+        /** 代表子块引用：childId + childIndex + 该子块自身命中分。 */
+        record RepChild(String childId, int childIndex, double score) {
+        }
+
+        /** 测试辅助：直接放入一条命中（同包可见，无代表子块，引用六字段回退默认值）。 */
+        void put(String parentId, String docId, double score) {
+            parentOrder.add(parentId);
+            bestScore.merge(parentId, score, Math::max);
+            parentDoc.putIfAbsent(parentId, docId);
+        }
+
+        /** 累积一条带子块的命中，并维护父块代表子块。 */
+        void put(String parentId, String docId, String childId, int childIndex, double score) {
+            put(parentId, docId, score);
+            noteChild(parentId, childId, childIndex, score);
+        }
+
+        /** 按"得分最高、平局 childIndex 最小"更新代表子块。 */
+        void noteChild(String parentId, String childId, int childIndex, double score) {
+            if (childId == null) {
+                return;
+            }
+            RepChild cur = repChild.get(parentId);
+            if (cur == null || score > cur.score() || (score == cur.score() && childIndex < cur.childIndex())) {
+                repChild.put(parentId, new RepChild(childId, childIndex, score));
+            }
+        }
     }
 
     private final WikiAgentProperties props;
@@ -62,13 +116,56 @@ public class RetrievalService {
     private final KbDocumentRepo docRepo;
     private final KbChildChunkRepo childRepo;
     private final MetricEventJpaDao metricEventDao;
+    /** E2：可选 rerank provider（不可用时为 null，检索按原序返回）。 */
+    private final RerankProvider rerankProvider;
+    /** E5：知识元数据 DAO（可选，权限过滤用；缺失时不过滤）。 */
+    private final KnowledgeMetadataJpaDao metadataDao;
+    /** E5：是否把权限表达式下推 Milvus（存量集合缺标量列时须保持 false）。 */
+    private final boolean milvusFilterMetadata;
+    /** E3：RERANK 打点器（可选，缺失时只重排不打点）。 */
+    private final ModelCallRecorder callRecorder;
+    /** 灰度发布决策（可选，缺失/未配置规则时不门控）。 */
+    private final GrayReleaseService grayRelease;
+    /** rerank 灰度特性名（wikiagent.gray.features.rerank）。 */
+    private static final String GRAY_FEATURE_RERANK = "rerank";
 
     /** Milvus 不可用截止时间戳；0 表示正常，>now 表示冷却降级中。 */
     private volatile long milvusDisabledUntil = 0L;
 
+    /** 兼容旧构造（测试/旧装配）：无 rerank provider、无权限过滤。 */
     public RetrievalService(WikiAgentProperties props, MilvusStoreService milvus, EmbeddingModel embeddingModel,
                             KbParentChunkRepo parentRepo, KbDocumentRepo docRepo, KbChildChunkRepo childRepo,
                             MetricEventJpaDao metricEventDao) {
+        this(props, milvus, embeddingModel, parentRepo, docRepo, childRepo, metricEventDao, null, null, false);
+    }
+
+    /** E5 构造（兼容）：无 RERANK 打点器。 */
+    public RetrievalService(WikiAgentProperties props, MilvusStoreService milvus, EmbeddingModel embeddingModel,
+                            KbParentChunkRepo parentRepo, KbDocumentRepo docRepo, KbChildChunkRepo childRepo,
+                            MetricEventJpaDao metricEventDao,
+                            org.springframework.beans.factory.ObjectProvider<RerankProvider> rerankProvider,
+                            org.springframework.beans.factory.ObjectProvider<KnowledgeMetadataJpaDao> metadataDao,
+                            boolean milvusFilterMetadata) {
+        this(props, milvus, embeddingModel, parentRepo, docRepo, childRepo, metricEventDao,
+                rerankProvider, metadataDao, milvusFilterMetadata, null, null);
+    }
+
+    /**
+     * E2/E3/E5 全量装配构造。
+     *
+     * @param callRecorder RERANK 打点器（ObjectProvider 可选；无 Bean 时不打点）
+     * @param grayRelease  灰度决策（ObjectProvider 可选；无 Bean 时不门控）
+     */
+    @org.springframework.beans.factory.annotation.Autowired
+    public RetrievalService(WikiAgentProperties props, MilvusStoreService milvus, EmbeddingModel embeddingModel,
+                            KbParentChunkRepo parentRepo, KbDocumentRepo docRepo, KbChildChunkRepo childRepo,
+                            MetricEventJpaDao metricEventDao,
+                            org.springframework.beans.factory.ObjectProvider<RerankProvider> rerankProvider,
+                            org.springframework.beans.factory.ObjectProvider<KnowledgeMetadataJpaDao> metadataDao,
+                            @org.springframework.beans.factory.annotation.Value(
+                                    "${wikiagent.milvus.filter-metadata:false}") boolean milvusFilterMetadata,
+                            org.springframework.beans.factory.ObjectProvider<ModelCallRecorder> callRecorder,
+                            org.springframework.beans.factory.ObjectProvider<GrayReleaseService> grayRelease) {
         this.props = props;
         this.milvus = milvus;
         this.embeddingModel = embeddingModel;
@@ -76,11 +173,19 @@ public class RetrievalService {
         this.docRepo = docRepo;
         this.childRepo = childRepo;
         this.metricEventDao = metricEventDao;
+        RerankProvider rp = rerankProvider == null ? null : rerankProvider.getIfAvailable();
+        this.rerankProvider = rp != null && rp.available() ? rp : null;
+        this.metadataDao = metadataDao == null ? null : metadataDao.getIfAvailable();
+        this.milvusFilterMetadata = milvusFilterMetadata;
+        this.callRecorder = callRecorder == null ? null : callRecorder.getIfAvailable();
+        this.grayRelease = grayRelease == null ? null : grayRelease.getIfAvailable();
     }
 
-    /** 单次多查询检索（一次组装）。 */
+    /** 单次多查询检索（一次组装，rerank 可用时重排）。 */
     public RetrievalResult retrieve(List<String> queries) {
-        RetrievalResult result = assemble(search(new Accumulator(), queries));
+        Accumulator acc = search(new Accumulator(), queries);
+        String rerankQuery = firstNonBlank(queries);
+        RetrievalResult result = assemble(acc, rerankQuery);
         recordRetrievalMetrics(result);
         return result;
     }
@@ -88,6 +193,32 @@ public class RetrievalService {
     /** 单查询单次检索（兼容旧链路）。 */
     public RetrievalResult retrieve(String query) {
         return retrieve(List.of(query));
+    }
+
+    /**
+     * E5：带权限表达式的单查询检索。filterExpression 与当前请求身份
+     * （X-Business-Identity → RetrievalSecurityContext）合并（AND）后生效。
+     */
+    public RetrievalResult retrieve(RetrievalQuery rq) {
+        RetrievalFilter filter = effectiveFilter(rq == null ? null : rq.filterExpression());
+        Accumulator acc = search(new Accumulator(),
+                rq == null ? List.of() : List.of(rq.query()), filter);
+        RetrievalResult result = assemble(acc, rq == null ? null : rq.query());
+        recordRetrievalMetrics(result);
+        return result;
+    }
+
+    /** 合并显式表达式与当前身份过滤。 */
+    private RetrievalFilter effectiveFilter(String filterExpression) {
+        return RetrievalFilter.parse(filterExpression).and(RetrievalSecurityContext.identityFilter());
+    }
+
+    private static String firstNonBlank(List<String> queries) {
+        if (queries == null) return "";
+        for (String q : queries) {
+            if (q != null && !q.isBlank()) return q;
+        }
+        return "";
     }
 
     /**
@@ -128,39 +259,121 @@ public class RetrievalService {
     /**
      * 执行一轮多查询混合检索并累积进 acc（空查询被忽略）。
      * 同一父块跨轮/跨查询只保留最高分与首次命中顺序。
+     * 自动叠加当前请求身份过滤（RetrievalSecurityContext）。
      */
     public Accumulator search(Accumulator acc, List<String> queries) {
+        return search(acc, queries, effectiveFilter(null));
+    }
+
+    /**
+     * E5：带权限过滤的多查询检索。关系库侧按 knowledge_metadata 行做权威过滤
+     * （未打标 chunk 默认放行）；wikiagent.milvus.filter-metadata=true 且集合含
+     * 标量列时同时下推 Milvus 表达式。
+     */
+    public Accumulator search(Accumulator acc, List<String> queries, RetrievalFilter filter) {
         if (acc == null || queries == null) {
             return acc;
         }
+        RetrievalFilter effective = filter == null ? RetrievalFilter.none() : filter;
+        String pushdownExpr = milvusFilterMetadata && !effective.isEmpty() ? effective.toMilvusExpr() : null;
         boolean fallback = System.currentTimeMillis() < milvusDisabledUntil;
         for (String q : queries) {
             if (q == null || q.isBlank()) {
                 continue;
             }
             if (fallback) {
-                localKeywordSearch(acc, q);
+                localKeywordSearch(acc, q, effective);
                 continue;
             }
             try {
                 float[] qvec = embeddingModel.embed(q);
                 List<MilvusStoreService.Hit> hits = milvus.hybridSearch(
                         qvec, q,
-                        props.retrieve().subTopk(), props.retrieve().finalTopk(), props.retrieve().rrfK());
+                        props.retrieve().subTopk(), props.retrieve().finalTopk(), props.retrieve().rrfK(),
+                        pushdownExpr);
+                hits = filterHitsByMetadata(hits, effective);
                 for (MilvusStoreService.Hit h : hits) {
-                    acc.parentOrder.add(h.parentId());
-                    acc.bestScore.merge(h.parentId(), h.score(), Math::max);
-                    acc.parentDoc.putIfAbsent(h.parentId(), h.docId());
+                    // §2.5：累积命中同时记录父块代表子块（最高分、平局 childIndex 小者）
+                    acc.put(h.parentId(), h.docId(), h.childId(), h.childIndex(), h.score());
                 }
             } catch (Exception e) {
                 // Milvus 不可用时降级为 DB 关键词检索（开发零依赖 / 生产故障兜底），冷却期内不再尝试 Milvus
                 log.warn("Milvus 混合检索失败，降级为本地关键词检索: {}", e.getMessage());
                 milvusDisabledUntil = System.currentTimeMillis() + FALLBACK_COOLDOWN_MS;
                 fallback = true;
-                localKeywordSearch(acc, q);
+                localKeywordSearch(acc, q, effective);
             }
         }
         return acc;
+    }
+
+    /**
+     * E5/E6：Milvus 命中的关系库权威过滤，<b>无论是否带 ACL 表达式始终执行</b>。
+     * 关系库为权威源（Milvus 行不物理删除，冲突下线只翻关系库软删标志），双门控：
+     * <ol>
+     *   <li>子块门：{@code kb_child_chunk} 行不存在或 {@code active=false} → 剔除；</li>
+     *   <li>元数据门：{@code knowledge_metadata} 行存在且 {@code isActive=false}
+     *       （冲突 DELETE_A/DELETE_B 下线）→ 剔除；行不存在默认放行；</li>
+     *   <li>ACL 门：权限表达式在上述基础上 AND 叠加。</li>
+     * </ol>
+     * 仅 DAO 查询异常时保守放行 + WARN；is_active 判定本身是内存布尔判断，不走异常分支。
+     */
+    private List<MilvusStoreService.Hit> filterHitsByMetadata(List<MilvusStoreService.Hit> hits,
+                                                              RetrievalFilter filter) {
+        if (hits == null || hits.isEmpty() || (childRepo == null && metadataDao == null)) {
+            return hits;
+        }
+        List<String> childIds = hits.stream().map(MilvusStoreService.Hit::childId).toList();
+        Map<String, KbChildChunk> childRows = null;
+        Map<String, KnowledgeMetadataEntity> meta = null;
+        try {
+            if (childRepo != null) {
+                childRows = new HashMap<>();
+                for (KbChildChunk c : childRepo.findByIdIn(childIds)) {
+                    childRows.put(c.getId(), c);
+                }
+            }
+            if (metadataDao != null) {
+                meta = loadMetadata(childIds);
+            }
+        } catch (Exception e) {
+            log.warn("检索软删/权限过滤的关系库查询失败（保守放行原结果）: {}", e.getMessage());
+            return hits;
+        }
+        List<MilvusStoreService.Hit> out = new ArrayList<>(hits.size());
+        for (MilvusStoreService.Hit h : hits) {
+            if (childRows != null) {
+                KbChildChunk c = childRows.get(h.childId());
+                if (c == null || !c.isActive()) {
+                    continue; // 子块行不存在（关系库为权威）或子块已软删
+                }
+            }
+            KnowledgeMetadataEntity m = meta == null ? null : meta.get(h.childId());
+            if (m != null && Boolean.FALSE.equals(m.getIsActive())) {
+                continue; // 冲突下线：元数据软删
+            }
+            if (!allowed(m, filter)) {
+                continue; // ACL 表达式门（AND 叠加）
+            }
+            out.add(h);
+        }
+        return out;
+    }
+
+    private Map<String, KnowledgeMetadataEntity> loadMetadata(List<String> chunkIds) {
+        Map<String, KnowledgeMetadataEntity> map = new HashMap<>();
+        for (KnowledgeMetadataEntity e : metadataDao.findByChunkIdIn(chunkIds)) {
+            map.put(e.getChunkId(), e);
+        }
+        return map;
+    }
+
+    /** 元数据行是否满足过滤；未打标（无行）默认放行。 */
+    private boolean allowed(KnowledgeMetadataEntity meta, RetrievalFilter filter) {
+        if (meta == null) {
+            return true;
+        }
+        return filter.matches(meta.getDomainTag(), meta.getSubDomainTag(), meta.getRequiredIdentity());
     }
 
     /**
@@ -172,6 +385,10 @@ public class RetrievalService {
      * 仅保证"无外部依赖可用 + 能命中字面重合知识"，不声称等价。
      */
     private void localKeywordSearch(Accumulator acc, String query) {
+        localKeywordSearch(acc, query, RetrievalFilter.none());
+    }
+
+    private void localKeywordSearch(Accumulator acc, String query, RetrievalFilter filter) {
         List<String> terms = extractTerms(query);
         if (terms.isEmpty()) {
             return;
@@ -181,7 +398,7 @@ public class RetrievalService {
         for (String term : terms) {
             List<KbChildChunk> rows;
             try {
-                rows = childRepo.findByContentContainingIgnoreCase(
+                rows = childRepo.findByContentContainingIgnoreCaseAndActiveTrue(
                         term, PageRequest.of(0, perTermLimit));
             } catch (Exception e) {
                 log.warn("本地关键词检索失败 term={}: {}", term, e.getMessage());
@@ -191,15 +408,32 @@ public class RetrievalService {
                 chunkTerms.merge(c, 1, Integer::sum);
             }
         }
+        // E5/E6：关系库权威过滤，filter 为空也执行（与 Milvus 路径双门控对齐）：
+        // knowledge_metadata 行存在且 isActive=false（冲突下线）→ 剔除；再 AND 叠加 ACL 表达式。
+        // 子块 active 已由 findByContentContainingIgnoreCaseAndActiveTrue 查询限定。
+        if (metadataDao != null && !chunkTerms.isEmpty()) {
+            try {
+                Map<String, KnowledgeMetadataEntity> meta = loadMetadata(
+                        chunkTerms.keySet().stream().map(KbChildChunk::getId).toList());
+                chunkTerms.keySet().removeIf(c -> {
+                    KnowledgeMetadataEntity m = meta.get(c.getId());
+                    if (m != null && Boolean.FALSE.equals(m.getIsActive())) {
+                        return true;
+                    }
+                    return !allowed(m, filter);
+                });
+            } catch (Exception e) {
+                log.warn("本地检索软删/权限过滤失败（保守放行）: {}", e.getMessage());
+            }
+        }
         chunkTerms.entrySet().stream()
                 .sorted(Comparator.<Map.Entry<KbChildChunk, Integer>>comparingInt(Map.Entry::getValue).reversed())
                 .limit(props.retrieve().subTopk())
                 .forEach(e -> {
                     KbChildChunk c = e.getKey();
                     double score = (double) e.getValue() / terms.size(); // 命中词占比，0~1
-                    acc.parentOrder.add(c.getParentId());
-                    acc.bestScore.merge(c.getParentId(), score, Math::max);
-                    acc.parentDoc.putIfAbsent(c.getParentId(), c.getDocId());
+                    // §2.5：本地降级路径同样记录代表子块，保证引用六字段两条路径一致
+                    acc.put(c.getParentId(), c.getDocId(), c.getId(), c.getChildIndex(), score);
                 });
     }
 
@@ -231,11 +465,99 @@ public class RetrievalService {
         return c >= 0x4E00 && c <= 0x9FFF;
     }
 
+    /**
+     * E2 rerank：可用时对候选父块按 rerank 分数重排 parentOrder。
+     * 候选父块内容缺失时跳过；任何异常不阻断，保持原顺序。
+     * E3：实际调用 provider 时写 purpose=RERANK 的 model_call_log（成功/失败各一行）；
+     * rerank 未启用/不可用/灰度未命中时本方法直接返回——没调就不写日志（诚实打点）。
+     * 灰度门控（需求10/15）：wikiagent.gray.features.rerank 按当前请求身份分桶放量。
+     */
+    private void maybeRerank(Accumulator acc, String query) {
+        if (rerankProvider == null || query == null || query.isBlank() || acc.parentOrder.size() < 2) {
+            return;
+        }
+        if (!rerankGrayAllowed()) {
+            return;
+        }
+        String provider = "dashscope";
+        String model = rerankProvider instanceof com.wikiagent.infrastructure.llm.DashScopeRerankProvider d
+                ? d.model() : rerankProvider.name();
+        long started = System.currentTimeMillis();
+        try {
+            List<String> parentIds = new ArrayList<>(acc.parentOrder);
+            Map<String, KbParentChunk> parents = new HashMap<>();
+            for (KbParentChunk p : parentRepo.findAllById(parentIds)) {
+                parents.put(p.getId(), p);
+            }
+            List<String> docs = new ArrayList<>(parentIds.size());
+            List<String> validIds = new ArrayList<>(parentIds.size());
+            for (String pid : parentIds) {
+                KbParentChunk p = parents.get(pid);
+                if (p == null) continue;
+                docs.add(p.getContent());
+                validIds.add(pid);
+            }
+            if (docs.size() < 2) {
+                return;
+            }
+            RerankResult rr = rerankProvider.rerank(new RerankRequest(query, docs, docs.size()));
+            if (rr == null || rr.scores() == null || rr.scores().size() != docs.size()) {
+                return;
+            }
+            recordRerank(provider, model, System.currentTimeMillis() - started, true);
+            List<String> reordered = new ArrayList<>(validIds);
+            List<Double> scores = rr.scores();
+            // 按分数降序稳定重排
+            List<Integer> idx = new ArrayList<>(validIds.size());
+            for (int i = 0; i < validIds.size(); i++) idx.add(i);
+            idx.sort((a, b) -> Double.compare(scores.get(b), scores.get(a)));
+            reordered.clear();
+            for (int i : idx) reordered.add(validIds.get(i));
+            acc.parentOrder.clear();
+            acc.parentOrder.addAll(reordered);
+            // bestScore 同步为 rerank 分数（保留两位小数精度语义不重要，取原值）
+            for (int i = 0; i < validIds.size(); i++) {
+                acc.bestScore.put(validIds.get(i), scores.get(i));
+            }
+        } catch (Exception e) {
+            recordRerank(provider, model, System.currentTimeMillis() - started, false);
+            log.warn("rerank 失败，保持原序: {}", e.getMessage());
+        }
+    }
+
+    /**
+     * rerank 灰度判定：灰度服务缺失（旧构造/单测）不门控；
+     * 灰度键为当前请求身份（RetrievalSecurityContext），无身份归入 anonymous 桶。
+     */
+    private boolean rerankGrayAllowed() {
+        if (grayRelease == null) {
+            return true;
+        }
+        return grayRelease.isEnabled(GRAY_FEATURE_RERANK, RetrievalSecurityContext.currentIdentity());
+    }
+
+    /** E3：RERANK 打点；callRecorder 缺失（旧装配/单测）时静默跳过。 */
+    private void recordRerank(String provider, String model, long latencyMs, boolean success) {
+        if (callRecorder != null) {
+            callRecorder.record(ModelCallLogPurpose.RERANK, provider, model,
+                    null, null, latencyMs, success, null, null, null);
+        }
+    }
+
     /** 累积器 → 父文档上下文：H2 回查父块全文与来源文件名，字符预算内按命中顺序编号组装。 */
     public RetrievalResult assemble(Accumulator acc) {
+        return assemble(acc, null);
+    }
+
+    /**
+     * E2：带 rerank 的组装。rerankProvider 可用时按 query 对候选父块重排，
+     * 重排失败/不可用不阻断，按原序返回。
+     */
+    public RetrievalResult assemble(Accumulator acc, String rerankQuery) {
         if (acc.parentOrder.isEmpty()) {
             return new RetrievalResult(List.of(), "");
         }
+        maybeRerank(acc, rerankQuery);
 
         // H2 回查父块全文与来源文件名（事实源）
         Map<String, KbParentChunk> parents = new HashMap<>();
@@ -246,6 +568,24 @@ public class RetrievalService {
         Map<String, String> docNames = new HashMap<>();
         for (KbDocument d : docRepo.findAllById(docIds)) {
             docNames.put(d.getId(), d.getFilename());
+        }
+
+        // §2.5：批量回查每个父块的代表子块，取 versionNo/pageNo/snippet
+        Map<String, KbChildChunk> repChildren = new HashMap<>();
+        if (!acc.repChild.isEmpty()) {
+            for (KbChildChunk c : childRepo.findByIdIn(
+                    acc.repChild.values().stream().map(Accumulator.RepChild::childId).toList())) {
+                repChildren.put(c.getId(), c);
+            }
+        }
+        // §2.5：artifactId 由 knowledge_metadata.artifact_id（V11）回填；未打标公共知识为 null
+        Map<String, String> artifactIds = new HashMap<>();
+        if (metadataDao != null && !repChildren.isEmpty()) {
+            for (KnowledgeMetadataEntity m : metadataDao.findByChunkIdIn(new ArrayList<>(repChildren.keySet()))) {
+                if (m.getArtifactId() != null) {
+                    artifactIds.put(m.getChunkId(), String.valueOf(m.getArtifactId()));
+                }
+            }
         }
 
         int budget = props.retrieve().parentCharBudget();
@@ -270,9 +610,28 @@ public class RetrievalService {
             ctx.append('[').append(idx).append("] 来源: ").append(filename).append('\n')
                     .append(content).append("\n\n");
             used += content.length();
-            sources.add(new Source(idx, p.getDocId(), filename, acc.bestScore.getOrDefault(parentId, 0.0)));
+            Accumulator.RepChild rc = acc.repChild.get(parentId);
+            KbChildChunk child = rc == null ? null : repChildren.get(rc.childId());
+            sources.add(new Source(idx, p.getDocId(),
+                    child != null ? child.getVersionNo() : 0,
+                    child != null ? child.getPageNo() : null,
+                    snippetOf(child == null ? null : child.getContent()),
+                    rc == null ? null : artifactIds.get(rc.childId()),
+                    acc.bestScore.getOrDefault(parentId, 0.0), filename));
             idx++;
         }
         return new RetrievalResult(sources, ctx.toString());
+    }
+
+    /** §2.5：引用片段 = 子块原文去空白后前 200 字符；子块缺失/空时为 null。 */
+    private static String snippetOf(String childContent) {
+        if (childContent == null) {
+            return null;
+        }
+        String s = childContent.strip();
+        if (s.isEmpty()) {
+            return null;
+        }
+        return s.length() > 200 ? s.substring(0, 200) : s;
     }
 }

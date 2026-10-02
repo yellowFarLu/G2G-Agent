@@ -1,0 +1,6 @@
+{
+  "steps": [
+    {"op": "arith", "params": {"expr": "unitPrice * qty"}, "to": "totalAmount"}
+  ],
+  "outputs": ["totalAmount"]
+}

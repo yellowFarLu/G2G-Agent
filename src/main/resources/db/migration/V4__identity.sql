@@ -13,8 +13,8 @@ CREATE TABLE IF NOT EXISTS user_identity (
     CONSTRAINT uk_user_identity UNIQUE (user_id)
 );
 
-CREATE INDEX IF NOT EXISTS idx_identity_user ON user_identity (user_id);
-CREATE INDEX IF NOT EXISTS idx_identity_role ON user_identity (business_identity);
+CREATE INDEX idx_identity_user ON user_identity (user_id);
+CREATE INDEX idx_identity_role ON user_identity (business_identity);
 
 -- 默认身份权限模板（管理员可 CRUD）
 CREATE TABLE IF NOT EXISTS identity_permission_template (

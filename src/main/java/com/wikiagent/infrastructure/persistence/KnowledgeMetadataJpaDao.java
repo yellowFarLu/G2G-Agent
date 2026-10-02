@@ -15,6 +15,8 @@ public interface KnowledgeMetadataJpaDao extends JpaRepository<KnowledgeMetadata
 
     Optional<KnowledgeMetadataEntity> findByChunkId(String chunkId);
 
+    List<KnowledgeMetadataEntity> findByChunkIdIn(List<String> chunkIds);
+
     List<KnowledgeMetadataEntity> findByDocId(String docId);
 
     List<KnowledgeMetadataEntity> findByDomainTagAndSubDomainTag(String domainTag, String subDomainTag);

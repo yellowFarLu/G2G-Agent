@@ -103,11 +103,11 @@ public class DashScopeMultiModelFactory {
      * call 返回空消息；stream 返回空 Flux（避免抛 UnsupportedOperationException）。
      * 默认 options 用 DashScopeChatOptions 装填模型名，避免实现 ChatOptions 全部抽象方法。
      */
-    static final class NoOpChatModel implements ChatModel {
+    public static final class NoOpChatModel implements ChatModel {
 
         private final DashScopeChatOptions defaultOptions;
 
-        NoOpChatModel(String modelName) {
+        public NoOpChatModel(String modelName) {
             this.defaultOptions = DashScopeChatOptions.builder()
                     .model(modelName)
                     .build();

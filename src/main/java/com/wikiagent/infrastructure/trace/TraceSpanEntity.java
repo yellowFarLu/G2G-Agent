@@ -75,6 +75,10 @@ public class TraceSpanEntity {
     @Column(name = "model_used", length = 64)
     private String modelUsed;
 
+    /** AC-I1（V16）：链路关联 ID，持久化时取自 MDC；无 MDC 上下文时为 NULL。 */
+    @Column(name = "trace_id", length = 64)
+    private String traceId;
+
     public Long getId() { return id; }
     public void setId(Long id) { this.id = id; }
     public String getConversationId() { return conversationId; }
@@ -109,4 +113,6 @@ public class TraceSpanEntity {
     public void setIntent(String intent) { this.intent = intent; }
     public String getModelUsed() { return modelUsed; }
     public void setModelUsed(String modelUsed) { this.modelUsed = modelUsed; }
+    public String getTraceId() { return traceId; }
+    public void setTraceId(String traceId) { this.traceId = traceId; }
 }

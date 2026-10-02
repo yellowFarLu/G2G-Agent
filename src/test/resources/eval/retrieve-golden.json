@@ -1,0 +1,39 @@
+[
+  {
+    "id": "retrieve-industry-negative-list",
+    "query": "工业园区产业准入负面清单如何备案",
+    "domain": "industry_solution",
+    "expectedChunkIds": ["eval-c-industry-1"],
+    "forbiddenChunkIds": ["eval-c-industry-old"]
+  },
+  {
+    "id": "retrieve-pms-invoice-flow",
+    "query": "物业缴费账单在哪里开具发票",
+    "domain": "pms",
+    "expectedChunkIds": ["eval-c-pms-1"]
+  },
+  {
+    "id": "retrieve-customs-declare-elements",
+    "query": "报关单商品归类申报要素怎么填",
+    "domain": "customs",
+    "expectedChunkIds": ["eval-c-customs-1"]
+  },
+  {
+    "id": "retrieve-settlement-recon-adjust",
+    "query": "对账差异调账处理流程是什么",
+    "domain": "settlement",
+    "expectedChunkIds": ["eval-c-settlement-1"]
+  },
+  {
+    "id": "retrieve-merchant-onboarding-sla",
+    "query": "商家入驻资质审核时效要多久",
+    "domain": "merchant_center",
+    "expectedChunkIds": ["eval-c-merchant-1"]
+  },
+  {
+    "id": "retrieve-trajectory-mileage",
+    "query": "车辆轨迹回放里程核算口径是什么",
+    "domain": "trajectory",
+    "expectedChunkIds": ["eval-c-trajectory-1"]
+  }
+]

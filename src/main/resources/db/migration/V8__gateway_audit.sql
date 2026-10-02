@@ -17,9 +17,9 @@ CREATE TABLE IF NOT EXISTS gateway_audit_log (
     created_at          TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
-CREATE INDEX IF NOT EXISTS idx_gateway_session ON gateway_audit_log (session_id);
-CREATE INDEX IF NOT EXISTS idx_gateway_detector ON gateway_audit_log (detector_name, direction);
-CREATE INDEX IF NOT EXISTS idx_gateway_result ON gateway_audit_log (detection_result);
+CREATE INDEX idx_gateway_session ON gateway_audit_log (session_id);
+CREATE INDEX idx_gateway_detector ON gateway_audit_log (detector_name, direction);
+CREATE INDEX idx_gateway_result ON gateway_audit_log (detection_result);
 
 -- 内容违规记录（被拦截的具体违规内容）
 CREATE TABLE IF NOT EXISTS content_violation_log (
@@ -35,6 +35,6 @@ CREATE TABLE IF NOT EXISTS content_violation_log (
     created_at          TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
-CREATE INDEX IF NOT EXISTS idx_violation_session ON content_violation_log (session_id);
-CREATE INDEX IF NOT EXISTS idx_violation_type ON content_violation_log (violation_type);
-CREATE INDEX IF NOT EXISTS idx_violation_severity ON content_violation_log (severity);
+CREATE INDEX idx_violation_session ON content_violation_log (session_id);
+CREATE INDEX idx_violation_type ON content_violation_log (violation_type);
+CREATE INDEX idx_violation_severity ON content_violation_log (severity);

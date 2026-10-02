@@ -15,6 +15,6 @@ CREATE TABLE IF NOT EXISTS audit_log (
     created_at      TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
-CREATE INDEX IF NOT EXISTS idx_audit_session ON audit_log (session_id);
-CREATE INDEX IF NOT EXISTS idx_audit_user ON audit_log (user_id);
-CREATE INDEX IF NOT EXISTS idx_audit_type ON audit_log (event_type);
+CREATE INDEX idx_audit_session ON audit_log (session_id);
+CREATE INDEX idx_audit_user ON audit_log (user_id);
+CREATE INDEX idx_audit_type ON audit_log (event_type);

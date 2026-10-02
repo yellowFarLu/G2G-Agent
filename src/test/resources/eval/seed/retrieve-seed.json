@@ -1,0 +1,67 @@
+{
+  "_comment": "H 离线评测种子数据：评测运行器先播种（eval- 前缀幂等：先删后插）再评测。时间字段统一用 NOW 哨兵，加载时解析为 Instant.now()，落在本次运行时间窗内。零真实业务数据、零外部依赖。",
+  "documents": [
+    {"id": "eval-doc-industry", "filename": "工业园区产业准入.pdf", "docType": "pdf", "sizeBytes": 102400, "status": "READY", "parentCount": 1, "childCount": 1},
+    {"id": "eval-doc-pms", "filename": "物业缴费开票指引.docx", "docType": "docx", "sizeBytes": 51200, "status": "READY", "parentCount": 1, "childCount": 1},
+    {"id": "eval-doc-customs", "filename": "报关单申报要素规范.pdf", "docType": "pdf", "sizeBytes": 88888, "status": "READY", "parentCount": 1, "childCount": 1},
+    {"id": "eval-doc-settlement", "filename": "结算对账调账规则.pdf", "docType": "pdf", "sizeBytes": 77777, "status": "READY", "parentCount": 1, "childCount": 1},
+    {"id": "eval-doc-merchant", "filename": "商家入驻审核时效.pdf", "docType": "pdf", "sizeBytes": 66666, "status": "READY", "parentCount": 1, "childCount": 1},
+    {"id": "eval-doc-trajectory", "filename": "轨迹里程核算口径.pdf", "docType": "pdf", "sizeBytes": 55555, "status": "READY", "parentCount": 1, "childCount": 1},
+    {"id": "eval-doc-industry-old", "filename": "工业园区准入旧版.pdf", "docType": "pdf", "sizeBytes": 44444, "status": "READY", "parentCount": 1, "childCount": 1}
+  ],
+  "parents": [
+    {"id": "eval-p-industry-1", "docId": "eval-doc-industry", "parentIndex": 0, "content": "工业园区企业产业准入负面清单备案指引：企业入园前需核对产业准入负面清单，完成备案后方可入驻。"},
+    {"id": "eval-p-pms-1", "docId": "eval-doc-pms", "parentIndex": 0, "content": "物业缴费账单开具发票流程指引：业主完成物业缴费账单后，可在线申请开具发票。"},
+    {"id": "eval-p-customs-1", "docId": "eval-doc-customs", "parentIndex": 0, "content": "跨境报关单商品归类申报要素填报规范：申报报关单时应逐项填写商品归类申报要素。"},
+    {"id": "eval-p-settlement-1", "docId": "eval-doc-settlement", "parentIndex": 0, "content": "结算对账差异调账处理规则：发现对账差异后，按调账流程提交结算处理。"},
+    {"id": "eval-p-merchant-1", "docId": "eval-doc-merchant", "parentIndex": 0, "content": "商家入驻资质审核时效说明：商家入驻资质材料提交后，审核时效为三个工作日。"},
+    {"id": "eval-p-trajectory-1", "docId": "eval-doc-trajectory", "parentIndex": 0, "content": "车辆轨迹回放与里程核算口径说明：轨迹回放数据按里程核算口径统计。"},
+    {"id": "eval-p-industry-old", "docId": "eval-doc-industry-old", "parentIndex": 0, "content": "工业园区产业准入负面清单旧版本文档（已重解析软删，禁止被检索命中）。"}
+  ],
+  "children": [
+    {"id": "eval-c-industry-1", "docId": "eval-doc-industry", "parentId": "eval-p-industry-1", "childIndex": 0, "pageNo": 1, "versionNo": 1, "active": true, "content": "工业园区企业产业准入负面清单备案指引：企业入园前需核对产业准入负面清单，完成备案后方可入驻。"},
+    {"id": "eval-c-pms-1", "docId": "eval-doc-pms", "parentId": "eval-p-pms-1", "childIndex": 0, "pageNo": 1, "versionNo": 1, "active": true, "content": "物业缴费账单开具发票流程指引：业主完成物业缴费账单后，可在线申请开具发票。"},
+    {"id": "eval-c-customs-1", "docId": "eval-doc-customs", "parentId": "eval-p-customs-1", "childIndex": 0, "pageNo": 1, "versionNo": 1, "active": true, "content": "跨境报关单商品归类申报要素填报规范：申报报关单时应逐项填写商品归类申报要素。"},
+    {"id": "eval-c-settlement-1", "docId": "eval-doc-settlement", "parentId": "eval-p-settlement-1", "childIndex": 0, "pageNo": 2, "versionNo": 1, "active": true, "content": "结算对账差异调账处理规则：发现对账差异后，按调账流程提交结算处理。"},
+    {"id": "eval-c-merchant-1", "docId": "eval-doc-merchant", "parentId": "eval-p-merchant-1", "childIndex": 0, "pageNo": 1, "versionNo": 1, "active": true, "content": "商家入驻资质审核时效说明：商家入驻资质材料提交后，审核时效为三个工作日。"},
+    {"id": "eval-c-trajectory-1", "docId": "eval-doc-trajectory", "parentId": "eval-p-trajectory-1", "childIndex": 0, "pageNo": 3, "versionNo": 1, "active": true, "content": "车辆轨迹回放与里程核算口径说明：轨迹回放数据按里程核算口径统计。"},
+    {"id": "eval-c-industry-old", "docId": "eval-doc-industry-old", "parentId": "eval-p-industry-old", "childIndex": 0, "pageNo": 1, "versionNo": 1, "active": false, "content": "工业园区产业准入负面清单旧版本文档（已重解析软删，禁止被检索命中）。"}
+  ],
+  "metadata": [
+    {"chunkId": "eval-c-industry-1", "docId": "eval-doc-industry", "domainTag": "industry_solution", "subDomainTag": "industry_access", "requiredIdentity": "*", "version": 1, "isActive": true, "pageNo": 1, "snippet": "工业园区企业产业准入负面清单备案指引"},
+    {"chunkId": "eval-c-pms-1", "docId": "eval-doc-pms", "domainTag": "pms", "subDomainTag": "pms_billing", "requiredIdentity": "*", "version": 1, "isActive": true, "pageNo": 1, "snippet": "物业缴费账单开具发票流程指引"},
+    {"chunkId": "eval-c-customs-1", "docId": "eval-doc-customs", "domainTag": "customs", "subDomainTag": "customs_declare", "requiredIdentity": "*", "version": 1, "isActive": true, "pageNo": 1, "snippet": "跨境报关单商品归类申报要素填报规范"},
+    {"chunkId": "eval-c-settlement-1", "docId": "eval-doc-settlement", "domainTag": "settlement", "subDomainTag": "settlement_recon", "requiredIdentity": "*", "version": 1, "isActive": true, "pageNo": 2, "snippet": "结算对账差异调账处理规则"},
+    {"chunkId": "eval-c-merchant-1", "docId": "eval-doc-merchant", "domainTag": "merchant_center", "subDomainTag": "merchant_onboarding", "requiredIdentity": "*", "version": 1, "isActive": true, "pageNo": 1, "snippet": "商家入驻资质审核时效说明"},
+    {"chunkId": "eval-c-trajectory-1", "docId": "eval-doc-trajectory", "domainTag": "trajectory", "subDomainTag": "trajectory_mileage", "requiredIdentity": "*", "version": 1, "isActive": true, "pageNo": 3, "snippet": "车辆轨迹回放与里程核算口径说明"}
+  ],
+  "feedback": [
+    {"userId": "eval-user", "sessionId": "eval-session", "conversationId": "eval-conv", "chunkId": "eval-doc-industry", "feedbackType": "USEFUL"},
+    {"userId": "eval-user", "sessionId": "eval-session", "conversationId": "eval-conv", "chunkId": "eval-doc-pms", "feedbackType": "USEFUL"},
+    {"userId": "eval-user", "sessionId": "eval-session", "conversationId": "eval-conv", "chunkId": "eval-doc-customs", "feedbackType": "USEFUL"},
+    {"userId": "eval-user", "sessionId": "eval-session", "conversationId": "eval-conv", "chunkId": "eval-doc-settlement", "feedbackType": "USEFUL"},
+    {"userId": "eval-user", "sessionId": "eval-session", "conversationId": "eval-conv", "chunkId": "eval-doc-merchant", "feedbackType": "USEFUL"},
+    {"userId": "eval-user", "sessionId": "eval-session", "conversationId": "eval-conv", "chunkId": "eval-doc-trajectory", "feedbackType": "USEFUL"}
+  ],
+  "fields": [
+    {"docId": "eval-doc-settlement", "fieldKey": "invoiceNo", "fieldLabel": "发票号码", "valueText": "12345678", "valueType": "STRING", "confidence": 0.95, "source": "MODEL", "schemaKey": "invoice-demo", "schemaVersion": "1.0", "valid": true, "reviewRequired": false, "versionNo": 1, "pageNo": 1, "snippet": "发票号码 12345678", "createdAt": "NOW", "updatedAt": "NOW"},
+    {"docId": "eval-doc-settlement", "fieldKey": "amount", "fieldLabel": "价税合计", "valueText": "1280.50", "valueType": "NUMBER", "confidence": 0.91, "source": "MODEL", "schemaKey": "invoice-demo", "schemaVersion": "1.0", "valid": true, "reviewRequired": false, "versionNo": 1, "pageNo": 2, "snippet": "价税合计 1280.50", "createdAt": "NOW", "updatedAt": "NOW"},
+    {"docId": "eval-doc-settlement", "fieldKey": "seller", "fieldLabel": "销售方", "valueText": "北京云智科技有限公司", "valueType": "STRING", "confidence": 0.93, "source": "MODEL", "schemaKey": "invoice-demo", "schemaVersion": "1.0", "valid": true, "reviewRequired": false, "versionNo": 1, "pageNo": 1, "snippet": "销售方 北京云智", "createdAt": "NOW", "updatedAt": "NOW"},
+    {"docId": "eval-doc-settlement", "fieldKey": "currency", "fieldLabel": "币种", "valueText": "CNY", "valueType": "STRING", "confidence": 0.99, "source": "RULE", "schemaKey": "invoice-demo", "schemaVersion": "1.0", "valid": true, "reviewRequired": false, "versionNo": 1, "pageNo": 1, "snippet": "币种 CNY", "createdAt": "NOW", "updatedAt": "NOW"},
+    {"docId": "eval-doc-settlement", "fieldKey": "taxNo", "fieldLabel": "税号", "valueText": "INVALID", "valueType": "STRING", "confidence": 0.40, "source": "MODEL", "schemaKey": "invoice-demo", "schemaVersion": "1.0", "valid": false, "reviewRequired": true, "versionNo": 1, "pageNo": 1, "snippet": "税号 INVALID", "createdAt": "NOW", "updatedAt": "NOW"}
+  ],
+  "reviewCases": [
+    {"caseType": "LOW_CONFIDENCE", "docId": "eval-doc-a", "fieldKey": "amount", "source": "MODEL", "confidence": 0.61, "status": "APPROVED", "ruleCode": null, "createdAt": "NOW", "resolvedAt": "NOW", "resolvedBy": "eval-reviewer"},
+    {"caseType": "LOW_CONFIDENCE", "docId": "eval-doc-b", "fieldKey": "taxNo", "source": "MODEL", "confidence": 0.40, "status": "REJECTED", "ruleCode": null, "createdAt": "NOW", "resolvedAt": "NOW", "resolvedBy": "eval-reviewer"},
+    {"caseType": "MATERIAL_DIFF", "docId": "eval-doc-c", "fieldKey": "seller", "source": "RULE", "confidence": 1.0, "status": "EDITED", "ruleCode": "eval-rule-material-diff", "createdAt": "NOW", "resolvedAt": "NOW", "resolvedBy": "eval-reviewer"},
+    {"caseType": "RULE_MISMATCH", "docId": "eval-doc-d", "fieldKey": "currency", "source": "RULE", "confidence": 1.0, "status": "EDITED", "ruleCode": "eval-rule-enum", "createdAt": "NOW", "resolvedAt": "NOW", "resolvedBy": "eval-reviewer"},
+    {"caseType": "LOW_CONFIDENCE", "docId": "eval-doc-e", "fieldKey": "buyer", "source": "MODEL", "confidence": 0.55, "status": "OPEN", "ruleCode": null, "createdAt": "NOW", "resolvedAt": null, "resolvedBy": null}
+  ],
+  "modelCalls": [
+    {"purpose": "CHAT", "provider": "noop", "model": "eval-stub", "tokensIn": 100, "tokensOut": 80, "costEstimate": 0.010, "latencyMs": 100, "status": "OK", "createdAt": "NOW"},
+    {"purpose": "CHAT", "provider": "noop", "model": "eval-stub", "tokensIn": 200, "tokensOut": 160, "costEstimate": 0.020, "latencyMs": 200, "status": "OK", "createdAt": "NOW"},
+    {"purpose": "CHAT", "provider": "noop", "model": "eval-stub", "tokensIn": 300, "tokensOut": 240, "costEstimate": 0.030, "latencyMs": 300, "status": "OK", "createdAt": "NOW"},
+    {"purpose": "CHAT", "provider": "noop", "model": "eval-stub", "tokensIn": 400, "tokensOut": 320, "costEstimate": 0.040, "latencyMs": 400, "status": "OK", "createdAt": "NOW"},
+    {"purpose": "RERANK", "provider": "noop", "model": "eval-rerank-stub", "tokensIn": 500, "tokensOut": 0, "costEstimate": 0.005, "latencyMs": 50, "status": "OK", "createdAt": "NOW"}
+  ]
+}

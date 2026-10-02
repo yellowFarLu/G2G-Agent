@@ -1,0 +1,96 @@
+[
+  {
+    "id": "rule-map-settlement",
+    "ruleCode": "eval-rule-map",
+    "domain": "settlement",
+    "dslFixture": "stubs/rules/rule-map.json",
+    "input": {
+      "amount": 1280.50,
+      "seller": "北京云智科技有限公司"
+    },
+    "expectedOutput": {
+      "mappedAmount": 1280.50
+    }
+  },
+  {
+    "id": "rule-const-currency",
+    "ruleCode": "eval-rule-const",
+    "domain": "settlement",
+    "dslFixture": "stubs/rules/rule-const.json",
+    "input": {},
+    "expectedOutput": {
+      "currency": "CNY"
+    }
+  },
+  {
+    "id": "rule-arith-customs-amount",
+    "ruleCode": "eval-rule-arith",
+    "domain": "customs",
+    "dslFixture": "stubs/rules/rule-arith.json",
+    "input": {
+      "unitPrice": 100,
+      "qty": 3
+    },
+    "expectedOutput": {
+      "totalAmount": 300
+    }
+  },
+  {
+    "id": "rule-regex-customs-invoice-no",
+    "ruleCode": "eval-rule-regex",
+    "domain": "customs",
+    "dslFixture": "stubs/rules/rule-regex.json",
+    "input": {
+      "invoiceNo": "12345678-99"
+    },
+    "expectedOutput": {
+      "invoiceNoValid": true
+    }
+  },
+  {
+    "id": "rule-enum-currency",
+    "ruleCode": "eval-rule-enum",
+    "domain": "settlement",
+    "dslFixture": "stubs/rules/rule-enum.json",
+    "input": {
+      "currency": "USD"
+    },
+    "expectedOutput": {
+      "currencyValid": true
+    }
+  },
+  {
+    "id": "rule-compare-amount-threshold",
+    "ruleCode": "eval-rule-compare",
+    "domain": "settlement",
+    "dslFixture": "stubs/rules/rule-compare.json",
+    "input": {
+      "amount": 1500
+    },
+    "expectedOutput": {
+      "overLimit": true
+    }
+  },
+  {
+    "id": "rule-material-diff-customs",
+    "ruleCode": "eval-rule-material-diff",
+    "domain": "customs",
+    "dslFixture": "stubs/rules/rule-material-diff.json",
+    "input": {
+      "materialA": {
+        "seller": "甲供应商",
+        "amount": "100"
+      },
+      "materialB": {
+        "seller": "甲供应商",
+        "amount": "200"
+      }
+    },
+    "expectedOutput": {
+      "diffs": [
+        {"fieldKey": "seller", "valueA": "甲供应商", "valueB": "甲供应商", "match": true},
+        {"fieldKey": "amount", "valueA": "100", "valueB": "200", "match": false}
+      ]
+    }
+  }
+]

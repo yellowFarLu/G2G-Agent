@@ -1,0 +1,12 @@
+{
+  "id": "judge-clean",
+  "domain": "industry_solution",
+  "question": "工业园区产业准入负面清单在哪里备案？",
+  "groundTruth": "园区管委会政务窗口",
+  "answer": "产业准入负面清单在园区管委会政务窗口办理备案，也可线上提交。",
+  "verdict": {
+    "factError": false,
+    "structureError": false
+  },
+  "reason": "录制评判：事实与口径一致，结构完整。"
+}

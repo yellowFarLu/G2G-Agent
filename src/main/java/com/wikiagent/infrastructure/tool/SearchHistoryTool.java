@@ -4,7 +4,6 @@ import com.wikiagent.domain.memory.HistoricalEvent;
 import com.wikiagent.domain.memory.HistoricalEventRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
 
 import java.util.List;
@@ -16,11 +15,10 @@ import java.util.List;
  * 帮助 Agent 在跨会话场景下复用历史结论（Reflexion 论文的 episodic memory 思想）。
  * <p>
  * 实施校正：原 @ConditionalOnBean(HistoricalEventRepository.class) 受组件扫描顺序
- * 影响不可靠；端口实现 MilvusHistoricalEventRepository 默认装配（matchIfMissing），
- * 故只保留 v1-v2 总开关 @ConditionalOnProperty。
+ * 影响不可靠；端口实现 MilvusHistoricalEventRepository 默认装配（matchIfMissing）。
+ * v1-v2 与 v6 PERO 双路径共用（v6 经 {@code PeroToolExecutor} 分派调用）。
  */
 @Component
-@ConditionalOnProperty(name = "wikiagent.pero.enabled", havingValue = "false")
 public class SearchHistoryTool {
 
     private static final Logger log = LoggerFactory.getLogger(SearchHistoryTool.class);

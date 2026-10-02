@@ -1,0 +1,12 @@
+{
+  "id": "judge-fact-error",
+  "domain": "settlement",
+  "question": "结算对账差异调账的审批时效是几个工作日？",
+  "groundTruth": "三个工作日",
+  "answer": "结算对账差异调账审批需要十个工作日。",
+  "verdict": {
+    "factError": true,
+    "structureError": false
+  },
+  "reason": "录制评判：答案给出的十个工作日与制度三个工作日不符，事实错误；结构完整。"
+}

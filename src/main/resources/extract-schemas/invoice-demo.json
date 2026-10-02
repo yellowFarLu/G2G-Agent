@@ -1,0 +1,61 @@
+{
+  "key": "invoice-demo",
+  "version": "1.0",
+  "description": "示例域：发票结构化字段（B4 首批注册表条目）",
+  "fields": [
+    {
+      "name": "invoiceNo",
+      "label": "发票号码",
+      "type": "STRING",
+      "required": true,
+      "pattern": "^[0-9A-Za-z]{6,20}$",
+      "enumValues": [],
+      "description": "发票号码（数字与字母，6-20 位）"
+    },
+    {
+      "name": "invoiceDate",
+      "label": "开票日期",
+      "type": "DATE",
+      "required": true,
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+      "enumValues": [],
+      "description": "开票日期，ISO 格式 yyyy-MM-dd"
+    },
+    {
+      "name": "amount",
+      "label": "价税合计",
+      "type": "NUMBER",
+      "required": true,
+      "pattern": null,
+      "enumValues": [],
+      "description": "价税合计金额（元，非负数字）"
+    },
+    {
+      "name": "seller",
+      "label": "销售方名称",
+      "type": "STRING",
+      "required": true,
+      "pattern": null,
+      "enumValues": [],
+      "description": "销售方/收款方全称"
+    },
+    {
+      "name": "buyer",
+      "label": "购买方名称",
+      "type": "STRING",
+      "required": false,
+      "pattern": null,
+      "enumValues": [],
+      "description": "购买方全称"
+    },
+    {
+      "name": "currency",
+      "label": "币种",
+      "type": "STRING",
+      "required": false,
+      "pattern": null,
+      "enumValues": ["CNY", "USD", "EUR"],
+      "description": "币种代码"
+    }
+  ]
+}

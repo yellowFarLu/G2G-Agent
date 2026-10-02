@@ -1,0 +1,149 @@
+# ============================================================
+# prod profile（生产）——安全默认（AC-J1）
+# 激活方式：SPRING_PROFILES_ACTIVE=prod（镜像内固定，勿在生产覆盖为其他值）
+#
+# 铁律：
+#   1. 本文件中的"安全默认"只增不改：ddl-auto=validate、debug 关、
+#      fallback/mock/noop 显式关闭或受控、actuator 仅暴露 health/info/prometheus
+#   2. 数据源/Redis/Milvus 等全部走环境变量占位且【无默认密码】，
+#      未注入所需变量时 fail-fast（DASHSCOPE_API_KEY 例外：缺失不阻止启动，
+#      但 /actuator/health 因 dashScopeKey 指标 DOWN）
+#   3. X-User-Id / X-Business-Identity 必须由网关注入；应用侧启用共享密钥
+#      信任边界过滤器（wikiagent.security.trust-boundary.enabled），
+#      密钥 WIKIAGENT_INTERNAL_SECRET 无默认值，缺失即启动失败
+# ============================================================
+debug: false
+
+spring:
+  datasource:
+    url: ${MYSQL_URL}
+    driver-class-name: com.mysql.cj.jdbc.Driver
+    username: ${MYSQL_USER}
+    password: ${MYSQL_PASSWORD}                # 无默认值：禁止内置生产口令
+    hikari:
+      maximum-pool-size: ${DB_POOL_MAX:20}
+      minimum-idle: ${DB_POOL_MIN:5}
+  jpa:
+    hibernate:
+      ddl-auto: validate                       # 生产只允许校验，Hibernate 不得建/改表
+    open-in-view: false
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.MySQLDialect
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+    baseline-on-migrate: true
+    validate-on-migrate: true                 # 迁移校验失败即拒绝启动
+  data:
+    redis:
+      host: ${REDIS_HOST}
+      port: ${REDIS_PORT:6379}
+      password: ${REDIS_PASSWORD}              # 无默认值
+      timeout: 3s
+  servlet:
+    multipart:
+      max-file-size: ${MAX_FILE_SIZE:50MB}     # 上传上限显式
+      max-request-size: ${MAX_REQUEST_SIZE:200MB}
+  mvc:
+    async:
+      request-timeout: -1                      # SSE 不设容器超时（由应用侧显式 complete）
+  session:
+    store-type: redis
+  ai:
+    dashscope:
+      # 缺失不阻止启动（避免密钥分发故障导致整体不可用），健康检查 DOWN 暴露配置缺失
+      api-key: ${DASHSCOPE_API_KEY:}
+
+logging:
+  level:
+    root: WARN
+    io.milvus: WARN
+    com.wikiagent: INFO
+
+server:
+  error:
+    include-stacktrace: never
+    include-message: never
+    include-binding-errors: never
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus         # 生产最小暴露集（env/beans/heapdump 等均不暴露）
+  endpoint:
+    health:
+      show-details: when_authorized
+      probes:
+        enabled: true
+
+wikiagent:
+  redis:
+    enabled: true
+  session:
+    redis-enabled: true
+
+  # ------------------------------------------------------------
+  # 降级/mock/noop：全部显式关闭或受控（安全默认；如确需降级必须由部署变量显式打开）
+  # ------------------------------------------------------------
+  fallback:
+    web-search-enabled: ${WIKIAGENT_FALLBACK_WEB_SEARCH_ENABLED:false}
+    own-knowledge-enabled: ${WIKIAGENT_FALLBACK_OWN_KNOWLEDGE_ENABLED:false}
+  routing:
+    mock-intents-enabled: false                # 禁止 Mock 意图以假乱真
+  parse:
+    # 受控：默认 none（不静默调用 AI 解析）；启用必须由部署显式选择 provider
+    provider: ${WIKIAGENT_PARSE_PROVIDER:none}
+  rerank:
+    # 默认开启（需求4重排能力实装）；无 DASHSCOPE_API_KEY 时 available()=false 自动跳过，
+    # 调用异常保持原检索序降级，可用 WIKIAGENT_RERANK_ENABLED=false 显式关闭
+    enabled: ${WIKIAGENT_RERANK_ENABLED:true}
+  cache:
+    answer:
+      enabled: ${WIKIAGENT_CACHE_ANSWER_ENABLED:false}   # 答案缓存默认关（防幻觉），受控开启
+
+  # ------------------------------------------------------------
+  # 任务框架 / MQ：生产 RocketMQ（nameServer 经 ROCKETMQ_NAME_SERVER 环境变量注入，
+  # 见 docs/operations/feature-toggles.md 必需变量清单）
+  # ------------------------------------------------------------
+  task:
+    enabled: ${WIKIAGENT_TASK_ENABLED:true}
+    mq: ${TASK_MQ:rocketmq}
+
+  milvus:
+    uri: ${MILVUS_URI}
+    username: ${MILVUS_USERNAME}
+    password: ${MILVUS_PASSWORD}               # 无默认值（禁止 root/milvus 内置口令）
+
+  # ------------------------------------------------------------
+  # 安全网关 / 信任边界 / PII 最小化外发
+  # ------------------------------------------------------------
+  security:
+    input-guardrail-enabled: true
+    output-guardrail-enabled: true
+    spotlighting-enabled: true
+    rule-of-two-enabled: true
+    trust-boundary:
+      # 生产默认启用（部署变量可紧急关闭，但必须显式决策）；
+      # 启用后 WIKIAGENT_INTERNAL_SECRET 必填，缺失即启动失败。
+      enabled: ${WIKIAGENT_TRUST_BOUNDARY_ENABLED:true}
+      secret: ${WIKIAGENT_INTERNAL_SECRET:}
+      # 共享密钥保护的身份头（网关 → 应用）
+      identity-headers:
+        - X-User-Id
+        - X-Business-Identity
+    pii-minimization:
+      enabled: ${WIKIAGENT_PII_MINIMIZATION_ENABLED:true}
+      # 每类 PII 的外发策略：mask=掩码后继续对话；block=直接阻断外发
+      policies:
+        phone: mask
+        email: mask
+        id-card: mask
+        bank-card: mask
+  # 限流契约（I3 令牌桶消费 wikiagent.ratelimit；复合键 tenant:user 单桶，超限 429+审计。
+  # 独立双档（用户/租户分桶）未实现，勿新增死配置）
+  ratelimit:
+    enabled: ${WIKIAGENT_RATELIMIT_ENABLED:true}
+    requests-per-minute: ${WIKIAGENT_RATELIMIT_PER_MINUTE:60}
+    backpressure-retry-after-sec: ${WIKIAGENT_RATELIMIT_RETRY_AFTER_SEC:5}

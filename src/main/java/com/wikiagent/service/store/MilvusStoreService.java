@@ -24,6 +24,7 @@ import io.milvus.v2.service.vector.request.ranker.RRFRanker;
 import io.milvus.v2.service.vector.response.SearchResp;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
 import java.util.ArrayList;
@@ -46,6 +47,17 @@ public class MilvusStoreService {
     private final WikiAgentProperties props;
     private final AtomicReference<MilvusClientV2> clientRef = new AtomicReference<>();
     private volatile String lastError = "尚未连接";
+
+    /**
+     * 修复4/E6：服务端表达式优先只取 is_active=true 向量行，避免扫描已下线向量。
+     * 注意：这只是性能侧的第一道筛——Milvus 行不做物理删除，冲突下线/重解析只翻关系库
+     * 软删标志，权威门控在 RetrievalService：无论本开关取值，检索结果都以关系库
+     * kb_child_chunk.active 与 knowledge_metadata.is_active 双门控为准。
+     * 旧版手工创建、未含 is_active 列的存量集合需重建集合或手动 ALTER ADD COLUMN；
+     * 升级过渡期可置 false 关闭服务端过滤（不影响关系库双门控）。
+     */
+    @Value("${wikiagent.milvus.filter-active:true}")
+    private boolean filterActive;
 
     public MilvusStoreService(WikiAgentProperties props) {
         this.props = props;
@@ -113,6 +125,20 @@ public class MilvusStoreService {
                 .fieldName("parent_id").dataType(DataType.VarChar).maxLength(64).build());
         schema.addField(AddFieldReq.builder()
                 .fieldName("child_index").dataType(DataType.Int32).build());
+        // 修复4：版本化检索——重解析后旧版本行 is_active=false 被过滤；page_no=0 表示无分页
+        schema.addField(AddFieldReq.builder()
+                .fieldName("version_no").dataType(DataType.Int32).build());
+        schema.addField(AddFieldReq.builder()
+                .fieldName("is_active").dataType(DataType.Bool).build());
+        schema.addField(AddFieldReq.builder()
+                .fieldName("page_no").dataType(DataType.Int32).build());
+        // E5：权限标量字段（用于 filter 下推）
+        schema.addField(AddFieldReq.builder()
+                .fieldName("domain_tag").dataType(DataType.VarChar).maxLength(64).isNullable(true).build());
+        schema.addField(AddFieldReq.builder()
+                .fieldName("sub_domain_tag").dataType(DataType.VarChar).maxLength(64).isNullable(true).build());
+        schema.addField(AddFieldReq.builder()
+                .fieldName("required_identity").dataType(DataType.VarChar).maxLength(64).isNullable(true).build());
 
         schema.addFunction(CreateCollectionReq.Function.builder()
                 .functionType(FunctionType.BM25)
@@ -165,6 +191,9 @@ public class MilvusStoreService {
             row.addProperty("doc_id", ch.getDocId());
             row.addProperty("parent_id", ch.getParentId());
             row.addProperty("child_index", ch.getChildIndex());
+            row.addProperty("version_no", ch.getVersionNo());
+            row.addProperty("is_active", ch.isActive());
+            row.addProperty("page_no", ch.getPageNo() == null ? 0 : ch.getPageNo());
             rows.add(row);
         }
         client().insert(InsertReq.builder()
@@ -173,7 +202,8 @@ public class MilvusStoreService {
                 .build());
     }
 
-    public record Hit(String childId, double score, String docId, String parentId, int childIndex) {
+    public record Hit(String childId, double score, String docId, String parentId, int childIndex,
+                      int versionNo, int pageNo) {
     }
 
     /**
@@ -181,27 +211,47 @@ public class MilvusStoreService {
      */
     public List<Hit> hybridSearch(float[] queryEmbedding, String rewrittenQuery,
                                   int subTopk, int finalTopk, int rrfK) {
+        return hybridSearch(queryEmbedding, rewrittenQuery, subTopk, finalTopk, rrfK, null);
+    }
+
+    /**
+     * E5 带权限表达式下推的混合检索：extraExpr（如 domain_tag/required_identity 标量过滤）
+     * 与 is_active 条件 AND 合并后下推。
+     * <p>
+     * 注意：下推要求 collection 建表时含相应标量字段；存量集合缺列时表达式会报错，
+     * 由调用方捕获并走关系库侧过滤兜底（wikiagent.milvus.filter-metadata 默认 false 不下推）。
+     */
+    public List<Hit> hybridSearch(float[] queryEmbedding, String rewrittenQuery,
+                                  int subTopk, int finalTopk, int rrfK, String extraExpr) {
         ensureCollection();
         List<BaseVector> denseVecs = List.of(new FloatVec(queryEmbedding));
         List<BaseVector> sparseVecs = List.of(new EmbeddedText(rewrittenQuery));
 
-        AnnSearchReq denseReq = AnnSearchReq.builder()
+        String activeExpr = filterActive ? "is_active == true" : null;
+        if (extraExpr != null && !extraExpr.isBlank()) {
+            activeExpr = activeExpr == null ? extraExpr : activeExpr + " and (" + extraExpr + ")";
+        }
+        AnnSearchReq.AnnSearchReqBuilder denseB = AnnSearchReq.builder()
                 .vectorFieldName("dense")
                 .vectors(denseVecs)
-                .topK(subTopk)
-                .build();
-        AnnSearchReq sparseReq = AnnSearchReq.builder()
+                .topK(subTopk);
+        AnnSearchReq.AnnSearchReqBuilder sparseB = AnnSearchReq.builder()
                 .vectorFieldName("sparse")
                 .vectors(sparseVecs)
-                .topK(subTopk)
-                .build();
+                .topK(subTopk);
+        if (activeExpr != null) {
+            denseB.expr(activeExpr);
+            sparseB.expr(activeExpr);
+        }
+        AnnSearchReq denseReq = denseB.build();
+        AnnSearchReq sparseReq = sparseB.build();
 
         HybridSearchReq req = HybridSearchReq.builder()
                 .collectionName(props.milvus().collection())
                 .searchRequests(List.of(denseReq, sparseReq))
                 .ranker(new RRFRanker(rrfK))
                 .limit(finalTopk)
-                .outFields(List.of("doc_id", "parent_id", "child_index"))
+                .outFields(List.of("doc_id", "parent_id", "child_index", "version_no", "page_no"))
                 .build();
 
         SearchResp resp = client().hybridSearch(req);
@@ -214,7 +264,9 @@ public class MilvusStoreService {
                     hit.getScore() == null ? 0 : hit.getScore(),
                     String.valueOf(entity.getOrDefault("doc_id", "")),
                     String.valueOf(entity.getOrDefault("parent_id", "")),
-                    entity.get("child_index") instanceof Number n ? n.intValue() : 0));
+                    entity.get("child_index") instanceof Number n ? n.intValue() : 0,
+                    entity.get("version_no") instanceof Number vn ? vn.intValue() : 1,
+                    entity.get("page_no") instanceof Number pn ? pn.intValue() : 0));
         }
         return result;
     }

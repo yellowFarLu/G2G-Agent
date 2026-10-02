@@ -2,7 +2,9 @@ package com.wikiagent.application.multiagent;
 
 import com.wikiagent.application.agent.pero.PeroAgent;
 import com.wikiagent.application.agent.pero.Perception;
+import com.wikiagent.application.task.handler.AgentTaskLauncher;
 import com.wikiagent.service.chat.SseSender;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.stereotype.Component;
 
 import java.util.Map;
@@ -43,9 +45,12 @@ final class IntentAgents {
     static class KnowledgeQaAgent implements IntentAgent {
 
         private final PeroAgent peroAgent;
+        private final ObjectProvider<AgentTaskLauncher> taskLauncherProvider;
 
-        KnowledgeQaAgent(PeroAgent peroAgent) {
+        KnowledgeQaAgent(PeroAgent peroAgent,
+                         ObjectProvider<AgentTaskLauncher> taskLauncherProvider) {
             this.peroAgent = peroAgent;
+            this.taskLauncherProvider = taskLauncherProvider;
         }
 
         @Override
@@ -55,6 +60,13 @@ final class IntentAgents {
 
         @Override
         public void invoke(Perception ctx, SseSender sse) {
+            // 任务框架开启时：提交 AGENT 任务并把任务流桥接回当前 SSE 客户端（支持暂停/取消/恢复）；
+            // 未开启（AgentTaskLauncher Bean 不存在）走原 PERO 同步链路，行为不变。
+            AgentTaskLauncher launcher = taskLauncherProvider.getIfAvailable();
+            if (launcher != null) {
+                launcher.launchAndBridge(ctx.userId(), ctx.sessionId(), ctx.userInput(), sse);
+                return;
+            }
             peroAgent.run(ctx.userId(), ctx.sessionId(), ctx.userInput(), sse);
         }
     }

@@ -74,6 +74,14 @@ management:
     web:
       exposure:
         include: health,info,metrics,prometheus
+  defaults:
+    metrics:
+      export:
+        enabled: true            # 显式开启（部分环境默认被关闭）
+  prometheus:
+    metrics:
+      export:
+        enabled: true            # prometheus 导出显式开启
   metrics:
     tags:
       application: wiki-agent
@@ -115,8 +123,12 @@ wikiagent:
   memory:
     short-term-max-turns: 20          # 短期记忆最多 20 轮
     short-term-ttl-hours: 24           # Redis TTL 24h
-    handover-dir: ./data/handover      # 交接清单存储目录
-    python-script: scripts/extract_field_index.py
+    handover-dir: ./data/handover      # 交接清单存储目录（file 模式/历史迁移用）
+    # 子项目 A §5：交接清单适配器，交付后默认 mysql（file 实现保留供回退）
+    handover-adapter: ${WIKIAGENT_MEMORY_HANDOVER_ADAPTER:mysql}   # file | mysql
+    # 一次性历史文件迁移开关：开发默认 false；docker compose 初始化置 true
+    file-migration:
+      enabled: ${WIKIAGENT_MEMORY_FILE_MIGRATION_ENABLED:false}
 
   # v1-v2 §7 LLM 路由
   routing:
@@ -195,6 +207,20 @@ wikiagent:
     optimize:
       enabled: true
 
+  # ============================================================
+  # 子项目 F1 工具权限治理：toolName → 角色/scope/批准语义 + 每 Agent 白名单
+  # 优先级：本配置 > DB tool_permission 表（V15） > 内置默认
+  # ============================================================
+  tool-permissions:
+    permissions:
+      # 写工具：需 scope profile:write 且需人工批准（高危）
+      update_user_profile:
+        required-scope: profile:write
+        requires-approval: true
+    agent-allowlists:
+      # PERO 主 Agent 默认全量白名单；示例给出 Supervisor 收窄示例（可被部署覆盖）
+      pero-agent: [search_knowledge_base, search_history, update_user_profile, read_handover, list_abandoned_paths]
+
   # v6 §21 Multi-Agent 架构
   multi-agent:
     enabled: ${WIKIAGENT_MULTI_AGENT_ENABLED:true}
@@ -215,9 +241,91 @@ wikiagent:
     state-reducer:
       default: overwrite
       list-keys: [messages, episodic_memory]
+
+  # ============================================================
+  # 子项目 A §6 任务框架（MySQL 状态机 + MQ 投递 + Redis 协调）
+  # 框架默认开启 + mq=local：JVM 本地调度，开发环境零外部中间件；
+  # docker compose / 生产通过 TASK_MQ=rocketmq 切换 RocketMQ。
+  # ============================================================
+  task:
+    enabled: ${WIKIAGENT_TASK_ENABLED:true}
+    mq: ${TASK_MQ:local}                # local | rocketmq
+    concurrency:
+      ingest: 2                         # cg-task-ingest 消费并发
+      agent: 4                          # cg-task-agent 消费并发
+    lease-ttl-sec: 30                   # Worker 租约 TTL
+    heartbeat-sec: 10                   # 心跳续租间隔
+    recovery-scan-sec: 15               # 崩溃租约回收扫描周期
+    dispatch-retry-scan-sec: 5          # PENDING 滞留补偿扫描周期
+    tenant-max-concurrent: 0            # 同租户并发上限，0 表示不限
+    defaults:
+      max-attempts: 3
+      step-timeout-sec: 300
+      agent-step-timeout-sec: 180
+      deadline-sec: 1800
+    backoff: [10s, 30s, 2m]            # 指数退避（RocketMQ 延迟等级 3/4/6）
+
   ingest:
     parent-chars: 1000
     parent-overlap: 150
     child-chars: 350
     child-overlap: 60
     embedding-batch: 10
+  # 子项目 B：文档智能解析（OCR/ASR/版面/表格）。provider=none 或缺 API Key 时流水线自动跳过 AI 能力
+  parse:
+    provider: ${WIKIAGENT_PARSE_PROVIDER:dashscope}
+    max-file-mb: 200
+    scanned-page-char-threshold: 20
+    # 文本层/OCR 双跑相似度低于该值（差异率超阈）→ CONFLICT 标记，不静默选一个
+    text-conflict-similarity: 0.85
+    ocr-timeout-sec: 30
+    asr-timeout-sec: 120
+    layout-timeout-sec: 30
+    table-timeout-sec: 60
+    max-attempts: 3
+    retry-backoff-base-ms: 500
+    circuit-open-sec: 60
+    circuit-failure-threshold: 3
+    vision-model: qwen-vl-max
+    asr-model: paraformer-v2
+    # ASR 要求文件公网可访问；部署 OSS 后配置前缀（如 https://bucket.oss.../audio），留空则 ASR 能力不可用
+    asr-file-base-url: ${WIKIAGENT_PARSE_ASR_BASE_URL:}
+    dashscope-base-url: https://dashscope.aliyuncs.com/api/v1
+  extract:
+    # 字段置信度低于该值自动转人工 REVIEW（规格 §2.1 默认 0.75）
+    low-confidence-threshold: 0.75
+    # 结构化输出校验失败后的修复重试次数
+    repair-attempts: 1
+
+  # ============================================================
+  # 子项目 E：RAG / 模型治理（E2 降级链 + E3 缓存 + E4 打点成本 + E5 检索权限）
+  # ============================================================
+  llm:
+    max-attempts: 2                       # provider 单次调用重试次数
+    retry-backoff-ms: 300                 # 重试退避基数（线性）
+    circuit-failure-threshold: 3          # 连续失败熔断阈值
+    circuit-open-sec: 60                  # 熔断打开秒数
+    # 单价（元 / 1K tokens）：tokensInPrice:tokensOutPrice，未配置模型成本记 null
+    pricing:
+      qwen-flash: "0.0005:0.001"
+      qwen-plus: "0.0008:0.002"
+      qwen-max: "0.02:0.06"
+  rerank:
+    # DashScope rerank 实装，默认开启；无 API Key 时 provider.available()=false 自动跳过，
+    # 调用失败由上层保持原序降级（不产生硬依赖）
+    enabled: ${WIKIAGENT_RERANK_ENABLED:true}
+    model: gte-rerank
+    base-url: ${WIKIAGENT_RERANK_BASE_URL:https://dashscope.aliyuncs.com/api/v1/services/rerank/text-rerank/text-rerank}
+  # 灰度发布（需求10/15）：按身份稳定哈希分桶放量；未配置的特性不门控（全量放开）。
+  # 灰度键为当前请求身份（RetrievalSecurityContext），无身份归入 anonymous 桶。
+  # 放量示例：features.rerank.percent=10 即 rerank 对 10% 身份放量；
+  # allowlist 恒命中 / denylist 恒拒绝（优先级高于 percent）。
+  gray:
+    features: {}
+  cache:
+    embedding:
+      enabled: ${WIKIAGENT_CACHE_EMBEDDING_ENABLED:true}
+      ttl-seconds: 86400
+    answer:
+      enabled: ${WIKIAGENT_CACHE_ANSWER_ENABLED:false}   # 默认关闭防幻觉
+      ttl-seconds: 600

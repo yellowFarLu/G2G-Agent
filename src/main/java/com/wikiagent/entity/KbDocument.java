@@ -18,6 +18,10 @@ public class KbDocument {
     public static final String INDEXING = "INDEXING";
     public static final String READY = "READY";
     public static final String FAILED = "FAILED";
+    /** 子项目 B：结构化字段抽取进行中（可选态）。 */
+    public static final String EXTRACTING = "EXTRACTING";
+    /** 子项目 B：介质必须依赖 AI 但供应商未配置，流水线终态（不静默产出空 chunk）。 */
+    public static final String AI_SKIPPED = "AI_SKIPPED";
 
     @Id
     @Column(length = 64)

@@ -75,6 +75,9 @@ public class MysqlTraceRepository {
         e.setTokenOutput(span.tokenOutput());
         e.setIntent(span.intent());
         e.setModelUsed(span.modelUsed());
+        // AC-I1（V16）：traceId 持久化时取自 MDC，与日志/model_call_log/task_event 串联；
+        // 无 MDC 上下文的调用（恢复扫描、异步脱管线程）落 NULL，不阻断写入。
+        e.setTraceId(org.slf4j.MDC.get("traceId"));
         return e;
     }
 

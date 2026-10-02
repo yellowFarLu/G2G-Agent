@@ -4,7 +4,6 @@ import com.wikiagent.domain.memory.HandoverRepository;
 import com.wikiagent.service.agent.JsonExtractor;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
 
 import java.util.List;
@@ -16,11 +15,10 @@ import java.util.Map;
  * 从交接清单中解析 abandonedPaths 段，供 Agent 在复盘时参考被放弃的执行路径。
  * 放弃路径记录了被放弃的节点与原因（§4）。
  * <p>
- * 实施校正：@ConditionalOnBean 受扫描顺序影响不可靠，FileHandoverRepository 默认装配，
- * 故只保留 v1-v2 总开关 @ConditionalOnProperty。
+ * 实施校正：@ConditionalOnBean 受扫描顺序影响不可靠，FileHandoverRepository 默认装配。
+ * v1-v2 与 v6 PERO 双路径共用（v6 经 {@code PeroToolExecutor} 分派调用）。
  */
 @Component
-@ConditionalOnProperty(name = "wikiagent.pero.enabled", havingValue = "false")
 public class ListAbandonedPathTool {
 
     private static final Logger log = LoggerFactory.getLogger(ListAbandonedPathTool.class);

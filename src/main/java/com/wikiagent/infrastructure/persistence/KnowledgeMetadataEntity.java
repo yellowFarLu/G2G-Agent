@@ -47,6 +47,18 @@ public class KnowledgeMetadataEntity {
     @Column(name = "is_active")
     private Boolean isActive = true;
 
+    /** C2/修复4：子块溯源页码（富解析分页）。 */
+    @Column(name = "page_no")
+    private Integer pageNo;
+
+    /** C2/修复4：原文片段（子块内容截断）。 */
+    @Column(name = "snippet", length = 500)
+    private String snippet;
+
+    /** C2/修复4：关联产物 ID（doc_artifact.id，可空）。 */
+    @Column(name = "artifact_id")
+    private Long artifactId;
+
     // Getters and Setters
     public Long getId() { return id; }
     public void setId(Long id) { this.id = id; }
@@ -72,4 +84,10 @@ public class KnowledgeMetadataEntity {
     public void setVersion(Integer version) { this.version = version; }
     public Boolean getIsActive() { return isActive; }
     public void setIsActive(Boolean isActive) { this.isActive = isActive; }
+    public Integer getPageNo() { return pageNo; }
+    public void setPageNo(Integer pageNo) { this.pageNo = pageNo; }
+    public String getSnippet() { return snippet; }
+    public void setSnippet(String snippet) { this.snippet = snippet; }
+    public Long getArtifactId() { return artifactId; }
+    public void setArtifactId(Long artifactId) { this.artifactId = artifactId; }
 }

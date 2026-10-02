@@ -1,0 +1,35 @@
+name: Eval Nightly
+
+# 子项目 H 离线评测（规格 §H，AC-H2）：
+# 每天 23:00 UTC（北京时间次日 07:00）离线跑全量黄金样本 + 七项指标，
+# 产出 EvalReport.json 作为基线演进依据；支持人工手动触发。
+# 零真实 API key、零 Docker：检索本地降级 + LLM/OCR/ASR/TABLE 全桩，
+# 真实 LLM 烟雾测试（@Tag("LiveLLM")）默认排除。
+on:
+  schedule:
+    - cron: '0 23 * * *'
+  workflow_dispatch:
+
+jobs:
+  offline-eval:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+
+      - name: Run offline evaluation
+        run: mvn -B test -Peval
+
+      - name: Upload evaluation report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: eval-report
+          path: target/eval-report/EvalReport.json
+          if-no-files-found: error
+          retention-days: 30

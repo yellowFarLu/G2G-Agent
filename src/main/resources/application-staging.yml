@@ -1,0 +1,91 @@
+# ============================================================
+# staging profile（预发/类生产）
+# 激活方式：SPRING_PROFILES_ACTIVE=staging
+#
+# 设计原则（AC-J1）：
+#   - 配置形态与 prod 对齐（MySQL + Redis + RocketMQ + Milvus 全部走环境变量，
+#     无任何内置默认密码），用于在合并上线前演练部署变量与迁移
+#   - Flyway 开启且开启迁移校验；JPA 只校验不建表
+#   - 各类降级/mock 开关显式给出（默认按生产口径关闭，可由部署变量临时打开）
+#   - 日志 INFO；actuator 暴露相对 prod 多一个 metrics 便于预发排障
+#   - 信任边界过滤器默认开启（共享密钥由环境变量注入；未配置则启动失败）
+# ============================================================
+spring:
+  datasource:
+    url: ${MYSQL_URL}
+    driver-class-name: com.mysql.cj.jdbc.Driver
+    username: ${MYSQL_USER}
+    password: ${MYSQL_PASSWORD}              # 无默认值：未注入即启动失败（fail-fast）
+  jpa:
+    hibernate:
+      ddl-auto: validate
+    open-in-view: false
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.MySQLDialect
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+    baseline-on-migrate: true
+    validate-on-migrate: true                # 类生产：迁移校验必须通过
+  data:
+    redis:
+      host: ${REDIS_HOST}
+      port: ${REDIS_PORT:6379}
+      password: ${REDIS_PASSWORD}            # 无默认值
+  servlet:
+    multipart:
+      max-file-size: ${MAX_FILE_SIZE:50MB}
+      max-request-size: ${MAX_REQUEST_SIZE:200MB}
+  # SSE：容器层不设异步超时（SseEmitter(0L) 已在应用层显式不超时）
+  mvc:
+    async:
+      request-timeout: -1
+  session:
+    store-type: redis
+  ai:
+    dashscope:
+      api-key: ${DASHSCOPE_API_KEY:}         # 缺失不阻断启动；健康检查 DOWN（见 DashScopeKeyHealthIndicator）
+
+logging:
+  level:
+    io.milvus: WARN
+    com.wikiagent: INFO
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,prometheus
+
+server:
+  error:
+    include-stacktrace: never
+    include-message: never
+
+wikiagent:
+  redis:
+    enabled: true
+  session:
+    redis-enabled: true
+  fallback:
+    # 显式降级开关：默认按生产口径关闭；演练降级时用环境变量单独打开
+    web-search-enabled: ${WIKIAGENT_FALLBACK_WEB_SEARCH_ENABLED:false}
+    own-knowledge-enabled: ${WIKIAGENT_FALLBACK_OWN_KNOWLEDGE_ENABLED:false}
+  routing:
+    mock-intents-enabled: false
+  parse:
+    provider: ${WIKIAGENT_PARSE_PROVIDER:none}
+  task:
+    mq: ${TASK_MQ:rocketmq}
+  milvus:
+    uri: ${MILVUS_URI}
+    username: ${MILVUS_USERNAME}
+    password: ${MILVUS_PASSWORD}
+  security:
+    trust-boundary:
+      # 预发默认演练开启；密钥无默认值，未配置 WIKIAGENT_INTERNAL_SECRET 时启动失败
+      enabled: ${WIKIAGENT_TRUST_BOUNDARY_ENABLED:true}
+      secret: ${WIKIAGENT_INTERNAL_SECRET:}
+    pii-minimization:
+      enabled: ${WIKIAGENT_PII_MINIMIZATION_ENABLED:true}
