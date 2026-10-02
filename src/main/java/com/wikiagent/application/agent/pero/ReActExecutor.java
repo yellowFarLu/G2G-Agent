@@ -1,6 +1,7 @@
 package com.wikiagent.application.agent.pero;
 
 import com.wikiagent.application.agent.ToolPermissionRegistry;
+import com.wikiagent.application.llm.ModelPricingService;
 import com.wikiagent.domain.agent.PlanStep;
 import com.wikiagent.domain.agent.ReActResult;
 import com.wikiagent.domain.agent.ReActStep;
@@ -17,8 +18,11 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.messages.SystemMessage;
 import org.springframework.ai.chat.messages.UserMessage;
+import org.springframework.ai.chat.metadata.Usage;
 import org.springframework.ai.chat.model.ChatModel;
+import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.chat.prompt.Prompt;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
@@ -64,22 +68,37 @@ public class ReActExecutor {
     private final ToolPermissionRegistry permissionRegistry;
     private final AuditLogRepository auditLog;
 
+    /**
+     * #17 真实计量计费（可选）：供应商 usage 可用时按 promptTokens+completionTokens
+     * 计 token，按 {@link ModelPricingService} 配置单价计成本；缺省/取不到时 cost=0。
+     */
+    private final ObjectProvider<ModelPricingService> pricingProvider;
+
     public ReActExecutor(ChatModel model, ToolRegistry toolRegistry,
                          ToolExecutor toolExecutor, TraceService trace) {
-        this(model, toolRegistry, toolExecutor, trace, null, null);
+        this(model, toolRegistry, toolExecutor, trace, null, null, null);
+    }
+
+    public ReActExecutor(ChatModel model, ToolRegistry toolRegistry,
+                         ToolExecutor toolExecutor, TraceService trace,
+                         ToolPermissionRegistry permissionRegistry,
+                         AuditLogRepository auditLog) {
+        this(model, toolRegistry, toolExecutor, trace, permissionRegistry, auditLog, null);
     }
 
     @Autowired
     public ReActExecutor(ChatModel model, ToolRegistry toolRegistry,
                          ToolExecutor toolExecutor, TraceService trace,
                          ToolPermissionRegistry permissionRegistry,
-                         AuditLogRepository auditLog) {
+                         AuditLogRepository auditLog,
+                         ObjectProvider<ModelPricingService> pricingProvider) {
         this.model = model;
         this.toolRegistry = toolRegistry;
         this.toolExecutor = toolExecutor;
         this.trace = trace;
         this.permissionRegistry = permissionRegistry;
         this.auditLog = auditLog;
+        this.pricingProvider = pricingProvider;
     }
 
     /**
@@ -122,15 +141,18 @@ public class ReActExecutor {
             TraceSpan sub = trace.start(conversationId, ctx.userId(),
                     "react:" + step.id() + ":" + (i + 1), step.goal());
             ReActStep ra;
+            ChatResponse resp;
             try {
-                ra = callReAct(prompt);
+                // #17 保留完整 ChatResponse 以读取供应商 usage（真实 token 计量）
+                resp = chat(REACT_SYSTEM, prompt);
+                ra = callReAct(resp);
             } catch (Exception e) {
                 trace.end(sub, null, "ERROR", e.getMessage());
                 log.warn("ReAct step {} iter {} 调用失败: {}", step.id(), i + 1, e.getMessage());
                 return ReActResult.truncated(traceList);
             }
             // F2：迭代后计量（+tokens、+cost、+1 iteration），sink 回调写回 payload
-            chargeBudget(governance, prompt);
+            chargeBudget(governance, prompt, resp);
 
             String observation;
             if (ra.action() == null || "FINAL".equalsIgnoreCase(nameOf(ra))) {
@@ -222,8 +244,8 @@ public class ReActExecutor {
                 + "\n请输出下一步 ReAct JSON。";
     }
 
-    private ReActStep callReAct(String prompt) {
-        String out = chat(REACT_SYSTEM, prompt);
+    private ReActStep callReAct(ChatResponse resp) {
+        String out = responseText(resp);
         Map<String, Object> json = JsonExtractor.parseObject(out);
         if (json.isEmpty()) {
             throw new IllegalStateException("ReAct 输出无法解析: " + out);
@@ -239,6 +261,13 @@ public class ReActExecutor {
             finalAnswer = null;
         }
         return new ReActStep(thought, action, finalAnswer);
+    }
+
+    private static String responseText(ChatResponse resp) {
+        if (resp == null || resp.getResult() == null || resp.getResult().getOutput() == null) {
+            return null;
+        }
+        return resp.getResult().getOutput().getText();
     }
 
     /** 估算每 1K token 成本（USD），治理计费用（与真实供应商价格解耦的标称值）。 */
@@ -276,17 +305,56 @@ public class ReActExecutor {
         return schema;
     }
 
-    /** F2：迭代后记账（粗估：4 字符 ≈ 1 token；prompt+输出合并计量）。 */
-    private void chargeBudget(ReActGovernance governance, String prompt) {
+    /**
+     * F2/#17 迭代后记账。
+     * <ul>
+     *   <li>响应携带供应商 usage（promptTokens/completionTokens）：按真实 token 计量，
+     *       成本走 {@link ModelPricingService} 配置单价；pricing 缺失或未配置该模型时 cost=0；</li>
+     *   <li>取不到 usage：回退 4 字符 ≈ 1 token 粗估（仅按 prompt 长度，保持历史行为），
+     *       成本用标称常量 {@value #COST_PER_1K_TOKENS} 估算。</li>
+     * </ul>
+     */
+    private void chargeBudget(ReActGovernance governance, String prompt, ChatResponse resp) {
         if (governance == null || governance.budgetTracker() == null) {
             return;
         }
         try {
-            long tokens = Math.max(1, (prompt == null ? 0 : prompt.length()) / 4L);
-            governance.budgetTracker().charge(tokens, tokens * COST_PER_1K_TOKENS / 1000d);
+            Usage usage = resp == null || resp.getMetadata() == null
+                    ? null : resp.getMetadata().getUsage();
+            Integer tokensIn = usage == null ? null : usage.getPromptTokens();
+            Integer tokensOut = usage == null ? null : usage.getCompletionTokens();
+
+            long tokens;
+            double cost;
+            if (tokensIn != null || tokensOut != null) {
+                long in = tokensIn == null ? 0 : tokensIn;
+                long out = tokensOut == null ? 0 : tokensOut;
+                tokens = Math.max(1, in + out);
+                cost = priceCost(resp, tokensIn, tokensOut);
+            } else {
+                tokens = Math.max(1, (prompt == null ? 0 : prompt.length()) / 4L);
+                cost = tokens * COST_PER_1K_TOKENS / 1000d;
+                log.info("ReAct 响应未携带 usage，token 与成本按 4 字符≈1 token 估算 [estimated]: tokens={}",
+                        tokens);
+            }
+            governance.budgetTracker().charge(tokens, cost);
         } catch (Exception e) {
             log.warn("预算记账失败（不阻断执行）: {}", e.getMessage());
         }
+    }
+
+    /** #17 按模型真实单价计成本；pricing 服务缺失/未配置时返回 0（不阻断计量）。 */
+    private double priceCost(ChatResponse resp, Integer tokensIn, Integer tokensOut) {
+        if (pricingProvider == null) {
+            return 0d;
+        }
+        ModelPricingService pricing = pricingProvider.getIfAvailable();
+        if (pricing == null || tokensIn == null || tokensOut == null) {
+            return 0d;
+        }
+        String model = resp.getMetadata() == null ? null : resp.getMetadata().getModel();
+        Double estimated = pricing.estimate(model, tokensIn, tokensOut);
+        return estimated == null ? 0d : estimated;
     }
 
     /** F3：上下文压缩阈值——轨迹超过该轮数后，早期轮次在 prompt 中折叠为摘要占位。 */
@@ -366,12 +434,8 @@ public class ReActExecutor {
         return o == null ? "" : String.valueOf(o).strip();
     }
 
-    private String chat(String system, String user) {
-        var resp = model.call(new Prompt(List.of(
+    private ChatResponse chat(String system, String user) {
+        return model.call(new Prompt(List.of(
                 new SystemMessage(system), new UserMessage(user))));
-        if (resp == null || resp.getResult() == null || resp.getResult().getOutput() == null) {
-            return null;
-        }
-        return resp.getResult().getOutput().getText();
     }
 }
