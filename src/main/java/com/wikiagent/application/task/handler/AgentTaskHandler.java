@@ -4,13 +4,16 @@ import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import com.wikiagent.application.agent.ToolPermissionRegistry;
 import com.wikiagent.application.agent.pero.PeroAgent;
 import com.wikiagent.application.agent.pero.PeroLoopHook;
 import com.wikiagent.application.agent.pero.Perception;
+import com.wikiagent.application.agent.pero.ReActGovernance;
 import com.wikiagent.application.task.TaskControlContext;
 import com.wikiagent.application.task.TaskStreamBus;
 import com.wikiagent.domain.agent.Plan;
 import com.wikiagent.domain.agent.PlanStep;
+import com.wikiagent.domain.tool.ToolCaller;
 import com.wikiagent.domain.task.ErrorCode;
 import com.wikiagent.domain.task.FatalTaskException;
 import com.wikiagent.domain.task.HumanRequiredException;
@@ -56,11 +59,20 @@ public class AgentTaskHandler implements TaskHandler {
     private final PeroAgent peroAgent;
     private final Handover handover;
     private final TaskStreamBus streamBus;
+    /** F1：工具权限注册表（可为 null：缺省时 NODE 步不做权限拦截）。 */
+    private final ToolPermissionRegistry permissionRegistry;
 
     public AgentTaskHandler(PeroAgent peroAgent, Handover handover, TaskStreamBus streamBus) {
+        this(peroAgent, handover, streamBus, null);
+    }
+
+    @org.springframework.beans.factory.annotation.Autowired
+    public AgentTaskHandler(PeroAgent peroAgent, Handover handover, TaskStreamBus streamBus,
+                            ToolPermissionRegistry permissionRegistry) {
         this.peroAgent = peroAgent;
         this.handover = handover;
         this.streamBus = streamBus;
+        this.permissionRegistry = permissionRegistry;
     }
 
     @Override
@@ -139,7 +151,8 @@ public class AgentTaskHandler implements TaskHandler {
         handover.declarePlan(new Plan(steps));
 
         peroAgent.executeLoop(p, new Plan(List.of(target)), handover,
-                new BusSseSender(streamBus, ctx.taskId(), MAPPER), new ControlHook());
+                new BusSseSender(streamBus, ctx.taskId(), MAPPER), new ControlHook(),
+                governanceOf(ctx, userId, sessionId));
 
         ObjectNode cp = MAPPER.createObjectNode().put("nodeId", target.id()).put("index", index);
         int percent = 5 + (85 * (index + 1)) / Math.max(1, steps.size());
@@ -177,6 +190,35 @@ public class AgentTaskHandler implements TaskHandler {
             throw new FatalTaskException(ErrorCode.INTERNAL,
                     "PLAN checkpoint 反序列化失败: " + e.getMessage(), e);
         }
+    }
+
+    /**
+     * F1：从 payload.args 构造 ReAct 治理上下文。
+     * agentName 取 args.agentName（默认 "pero-agent"）；caller 的 role/scope 取
+     * args.userRole / args.userScope（逗号分隔）。permissionRegistry 缺省时返回 null（不拦截）。
+     */
+    private ReActGovernance governanceOf(TaskExecutionContext ctx, String userId, String sessionId) {
+        if (permissionRegistry == null) {
+            return null;
+        }
+        JsonNode args = ctx.args();
+        String agentName = textArg(args, "agentName", "pero-agent");
+        String role = textArg(args, "userRole", null);
+        List<String> scopes = new java.util.ArrayList<>();
+        String scopeCsv = textArg(args, "userScope", null);
+        if (scopeCsv != null) {
+            for (String s : scopeCsv.split(",")) {
+                if (!s.isBlank()) {
+                    scopes.add(s.strip());
+                }
+            }
+        }
+        return ReActGovernance.of(ToolCaller.of(userId, role, scopes), agentName, sessionId);
+    }
+
+    private static String textArg(JsonNode args, String key, String def) {
+        JsonNode v = args == null ? null : args.get(key);
+        return v != null && v.isTextual() && !v.asText().isBlank() ? v.asText() : def;
     }
 
     private static String truncate(String text) {

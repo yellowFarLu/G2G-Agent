@@ -111,6 +111,15 @@ public class PeroAgent {
      */
     public void executeLoop(Perception ctx, Plan plan, Handover handover,
                             SseSender sse, PeroLoopHook hook) {
+        executeLoop(ctx, plan, handover, sse, hook, null);
+    }
+
+    /**
+     * F 治理版重载：携带 {@link ReActGovernance}（权限/审批/预算），
+     * 原五参方法委托 null 治理（v6 聊天路径行为不变）。
+     */
+    public void executeLoop(Perception ctx, Plan plan, Handover handover,
+                            SseSender sse, PeroLoopHook hook, ReActGovernance governance) {
         String conversationId = ctx.userId() + ":" + ctx.sessionId();
         int nodeIndex = 0;
         while (!plan.steps().isEmpty()) {
@@ -123,7 +132,7 @@ public class PeroAgent {
                 // 3. EXECUTE：节点内部用 ReAct (Thought/Action/Observation) 循环
                 java.util.concurrent.atomic.AtomicInteger iter = new java.util.concurrent.atomic.AtomicInteger();
                 ReActResult result = reactExecutor.execute(step, ctx, handover, maxIter,
-                        () -> hook.afterReactIteration(step, iter.incrementAndGet()));
+                        () -> hook.afterReactIteration(step, iter.incrementAndGet()), governance);
                 handover.completeNode(step, result);
 
                 // 4. REFLECT：让 LLM 复盘节点结果（Reflexion 论文 §20.2 #3）
@@ -133,7 +142,8 @@ public class PeroAgent {
                 // 5. OPTIMIZE：据反思动态调整剩余 Plan（Self-Refine + LangGraph Re-Plan §20.2 #5/#6）
                 if (reflection.needsRework()) {
                     log.debug("节点 {} 需要重做，携带 hint 进入下一轮 ReAct", step.id());
-                    ReActResult redone = reactExecutor.execute(step, ctx.with(reflection), handover, maxIter);
+                    ReActResult redone = reactExecutor.execute(step, ctx.with(reflection), handover, maxIter,
+                            () -> { }, governance);
                     handover.completeNode(step, redone);
                 }
                 trace.end(nodeSpan, result.toString(), result.done() ? "OK" : "TRUNCATED", null);

@@ -199,6 +199,20 @@ wikiagent:
     optimize:
       enabled: true
 
+  # ============================================================
+  # 子项目 F1 工具权限治理：toolName → 角色/scope/批准语义 + 每 Agent 白名单
+  # 优先级：本配置 > DB tool_permission 表（V15） > 内置默认
+  # ============================================================
+  tool-permissions:
+    permissions:
+      # 写工具：需 scope profile:write 且需人工批准（高危）
+      update_user_profile:
+        required-scope: profile:write
+        requires-approval: true
+    agent-allowlists:
+      # PERO 主 Agent 默认全量白名单；示例给出 Supervisor 收窄示例（可被部署覆盖）
+      pero-agent: [search_knowledge_base, search_history, update_user_profile, read_handover, list_abandoned_paths]
+
   # v6 §21 Multi-Agent 架构
   multi-agent:
     enabled: ${WIKIAGENT_MULTI_AGENT_ENABLED:true}

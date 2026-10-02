@@ -1,9 +1,12 @@
 package com.wikiagent.application.agent.pero;
 
+import com.wikiagent.application.agent.ToolPermissionRegistry;
 import com.wikiagent.domain.agent.PlanStep;
 import com.wikiagent.domain.agent.ReActResult;
 import com.wikiagent.domain.agent.ReActStep;
 import com.wikiagent.domain.agent.ThoughtActionObservation;
+import com.wikiagent.domain.tool.ToolCaller;
+import com.wikiagent.infrastructure.trace.AuditLogRepository;
 import com.wikiagent.service.agent.JsonExtractor;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -11,6 +14,7 @@ import org.springframework.ai.chat.messages.SystemMessage;
 import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.chat.prompt.Prompt;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 import java.util.ArrayList;
@@ -51,12 +55,26 @@ public class ReActExecutor {
     private final ToolExecutor toolExecutor;
     private final int defaultMaxIter = 8;
 
+    /** F1：工具权限注册表 + 审计（可选，缺省时不做权限拦截，保持既有行为）。 */
+    private final ToolPermissionRegistry permissionRegistry;
+    private final AuditLogRepository auditLog;
+
     public ReActExecutor(ChatModel model, ToolRegistry toolRegistry,
                          ToolExecutor toolExecutor, TraceService trace) {
+        this(model, toolRegistry, toolExecutor, trace, null, null);
+    }
+
+    @Autowired
+    public ReActExecutor(ChatModel model, ToolRegistry toolRegistry,
+                         ToolExecutor toolExecutor, TraceService trace,
+                         ToolPermissionRegistry permissionRegistry,
+                         AuditLogRepository auditLog) {
         this.model = model;
         this.toolRegistry = toolRegistry;
         this.toolExecutor = toolExecutor;
         this.trace = trace;
+        this.permissionRegistry = permissionRegistry;
+        this.auditLog = auditLog;
     }
 
     /**
@@ -76,6 +94,16 @@ public class ReActExecutor {
      */
     public ReActResult execute(PlanStep step, Perception ctx, Handover handover,
                                int maxIter, Runnable iterationGate) {
+        return execute(step, ctx, handover, maxIter, iterationGate, null);
+    }
+
+    /**
+     * F1/F2/F3 治理版重载：携带 ReActGovernance（caller/agentName/预算/审批续跑），
+     * 原五参方法委托 null 治理，行为完全不变（不拦截、不计费、不批准）。
+     */
+    public ReActResult execute(PlanStep step, Perception ctx, Handover handover,
+                               int maxIter, Runnable iterationGate,
+                               ReActGovernance governance) {
         int limit = maxIter > 0 ? maxIter : defaultMaxIter;
         List<ThoughtActionObservation> traceList = new ArrayList<>();
         List<String> allowedTools = toolRegistry.allowedTools(step);
@@ -105,12 +133,22 @@ public class ReActExecutor {
 
             // Action → Observation
             ReActAction action = new ReActAction(nameOf(ra), argsOf(ra));
-            try {
-                observation = toolExecutor.invoke(action, ctx);
-            } catch (Exception e) {
-                observation = "ERROR: " + e.getMessage();
-                log.warn("ReAct step {} iter {} 工具 {} 调用失败: {}",
-                        step.id(), i + 1, action.name(), e.getMessage());
+            // F1：工具权限拦截（白名单/角色/scope 三维）；拒绝则不执行工具并写 TOOL_DENIED 审计
+            String denyReason = permissionRegistry == null || governance == null
+                    ? null
+                    : permissionRegistry.denyReason(action.name(), governance.caller(), governance.agentName());
+            if (denyReason != null) {
+                observation = "TOOL_DENIED: " + denyReason;
+                auditToolDenied(action.name(), governance, denyReason);
+                log.warn("ReAct step {} iter {} 工具 {} 权限拒绝: {}", step.id(), i + 1, action.name(), denyReason);
+            } else {
+                try {
+                    observation = toolExecutor.invoke(action, ctx);
+                } catch (Exception e) {
+                    observation = "ERROR: " + e.getMessage();
+                    log.warn("ReAct step {} iter {} 工具 {} 调用失败: {}",
+                            step.id(), i + 1, action.name(), e.getMessage());
+                }
             }
             traceList.add(ra.toTAO(observation));
             trace.end(sub, observation, "OK", null);
@@ -172,6 +210,21 @@ public class ReActExecutor {
             finalAnswer = null;
         }
         return new ReActStep(thought, action, finalAnswer);
+    }
+
+    /** F1：TOOL_DENIED 审计落库（eventType=TOOL_DENIED，含 toolName/userId/reason）。 */
+    private void auditToolDenied(String toolName, ReActGovernance governance, String reason) {
+        if (auditLog == null) {
+            return;
+        }
+        try {
+            String userId = governance.caller() == null ? null : governance.caller().userId();
+            auditLog.log(userId, governance.sessionId(), "TOOL_DENIED", "tool_permission",
+                    "WARN", "tool=" + toolName, "BLOCKED",
+                    "toolName=" + toolName + " userId=" + userId + " reason=" + reason);
+        } catch (Exception e) {
+            log.warn("TOOL_DENIED 审计写入失败 tool={}: {}", toolName, e.getMessage());
+        }
     }
 
     private static String nameOf(ReActStep ra) {
