@@ -2,7 +2,11 @@ package com.wikiagent.application.task;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.wikiagent.application.observability.trace.MdcCallable;
+import com.wikiagent.application.observability.trace.MdcRunnable;
+import com.wikiagent.application.observability.trace.TaskTraceConveyor;
 import com.wikiagent.config.TaskProperties;
+import com.wikiagent.domain.observability.trace.TraceIdGenerator;
 import com.wikiagent.domain.task.ActorType;
 import com.wikiagent.domain.task.CancelSignalException;
 import com.wikiagent.domain.task.ErrorCode;
@@ -32,8 +36,11 @@ import com.wikiagent.domain.task.ports.TaskEventRepositoryPort;
 import com.wikiagent.domain.task.ports.TaskRepositoryPort;
 import com.wikiagent.domain.task.ports.TaskStepRepositoryPort;
 import jakarta.annotation.PreDestroy;
+import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.core.instrument.Timer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.slf4j.MDC;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
@@ -89,6 +96,19 @@ public class TaskWorker implements TaskMessageSink {
     /** 字段注入：保持 12 参构造以支持测试手工实例化（手工 new 时为 null，onWatchdog 空转）。 */
     @Autowired(required = false)
     private TaskWatchdog watchdog;
+
+    /**
+     * 子项目 I（AC-I1）：任务 traceId 跨线程传送带（字段注入保持构造稳定；
+     * 手工 new 的测试中为 null，worker 对每次投递生成新 traceId）。
+     */
+    @Autowired(required = false)
+    private TaskTraceConveyor traceConveyor;
+
+    /**
+     * 子项目 I（AC-I2）：任务时长/失败计量钩子（字段注入；为 null 时不计量）。
+     */
+    @Autowired(required = false)
+    private MeterRegistry meterRegistry;
     private final ExecutorService stepPool = Executors.newCachedThreadPool(r -> {
         Thread t = new Thread(r, "task-worker-step");
         t.setDaemon(true);
@@ -136,6 +156,22 @@ public class TaskWorker implements TaskMessageSink {
 
     @Override
     public void onMessage(String taskId, String taskType) {
+        // 子项目 I（AC-I1）：跨线程传送带取回触发请求的 traceId；
+        // 无绑定（恢复扫描/retry/看门狗/RocketMQ 跨进程）时生成新 traceId
+        String inherited = traceConveyor == null ? null : traceConveyor.consume(taskId);
+        String traceId = inherited != null ? inherited : TraceIdGenerator.generate();
+        MDC.put("traceId", traceId);
+        Timer.Sample sample = Timer.start();
+        try {
+            processMessage(taskId, taskType);
+        } finally {
+            recordTaskMetrics(taskId, taskType, sample);
+            MDC.remove("traceId");
+        }
+    }
+
+    /** 单次任务消息处理（onMessage 的 MDC/计量边界之内）。 */
+    private void processMessage(String taskId, String taskType) {
         // ① 幂等护栏：任务不存在或状态不可领取（非 PENDING/DISPATCH）直接 ACK 跳过
         TaskInstance current = taskRepo.findByTaskId(taskId).orElse(null);
         if (current == null || !TaskStateMachine.canLease(current.status())) {
@@ -151,6 +187,9 @@ public class TaskWorker implements TaskMessageSink {
         // LEASE：PENDING/DISPATCH → RUNNING
         task = taskRepo.save(task.withStatus(TaskStateMachine.transition(task.status(), TaskEventType.LEASE)));
         eventRepo.append(event(taskId, TaskEventType.LEASE, null));
+        // AC-I1：任务正式领取（MDC traceId 与触发请求同源，恢复/retry 扫描时为 worker 新生成）
+        log.info("任务领取开始执行: taskId={} taskType={} attempt={} traceId={}",
+                taskId, taskType, task.attempt(), MDC.get("traceId"));
         // 看门狗双保险：leaseTtl 后核对租约/心跳是否存活（规格 1.4）
         dispatcher.dispatchWatchdog(taskId, workerId, WATCHDOG_DELAY_LEVEL);
 
@@ -161,6 +200,45 @@ public class TaskWorker implements TaskMessageSink {
             heartbeat.shutdownNow();
             TaskControlContext.clear();
             leasePort.release(taskId, workerId);
+        }
+    }
+
+    /**
+     * 子项目 I（AC-I2）：任务执行段计时与失败计数。
+     * 仅在任务进入终态/挂起态后记录（租约易主让位时任务仍 RUNNING，不计以避免重复）。
+     */
+    private void recordTaskMetrics(String taskId, String taskType, Timer.Sample sample) {
+        if (meterRegistry == null) {
+            return;
+        }
+        try {
+            TaskInstance latest = taskRepo.findByTaskId(taskId).orElse(null);
+            if (latest == null) {
+                return;
+            }
+            String result;
+            switch (latest.status()) {
+                case COMPLETED -> result = "completed";
+                case FAILED -> result = "failed";
+                case CANCELLED -> result = "cancelled";
+                case WAITING_HUMAN -> result = "waiting_human";
+                case SUSPENDED -> result = "suspended";
+                default -> {
+                    return;
+                }
+            }
+            sample.stop(Timer.builder("wikiagent.task.duration.seconds")
+                    .description("任务执行耗时（秒）")
+                    .tag("taskType", taskType)
+                    .tag("result", result)
+                    .register(meterRegistry));
+            if (latest.status() == TaskStatus.FAILED) {
+                String reason = latest.errorCode() == null ? "UNKNOWN" : latest.errorCode().name();
+                meterRegistry.counter("wikiagent.task.failed.total",
+                        "type", taskType, "reason", reason).increment();
+            }
+        } catch (Exception e) {
+            log.warn("任务指标记录失败（不影响主链路）taskId={}: {}", taskId, e.getMessage());
         }
     }
 
@@ -180,7 +258,7 @@ public class TaskWorker implements TaskMessageSink {
         });
         AtomicInteger progressRef = new AtomicInteger(
                 taskRepo.findByTaskId(taskId).map(TaskInstance::progressPercent).orElse(0));
-        heartbeat.scheduleAtFixedRate(() -> {
+        heartbeat.scheduleAtFixedRate(MdcRunnable.wrap(() -> {
             try {
                 Instant now = Instant.now();
                 leasePort.renew(taskId, workerId, Duration.ofSeconds(props.getLeaseTtlSec()));
@@ -195,7 +273,7 @@ public class TaskWorker implements TaskMessageSink {
             } catch (Exception ignored) {
                 // 心跳失败不影响主流程；租约过期由恢复扫描兜底（Task 9）
             }
-        }, props.getHeartbeatSec(), props.getHeartbeatSec(), TimeUnit.SECONDS);
+        }), props.getHeartbeatSec(), props.getHeartbeatSec(), TimeUnit.SECONDS);
         return heartbeat;
     }
 
@@ -266,7 +344,7 @@ public class TaskWorker implements TaskMessageSink {
             // ⑥ 逐步执行：池内 submit + 步骤超时
             stepRepo.markRunning(taskId, def.no(), Instant.now());
             eventRepo.append(event(taskId, TaskEventType.STEP_START, stepDetail(def)));
-            Future<StepResult> future = stepPool.submit(() -> {
+            Future<StepResult> future = stepPool.submit(MdcCallable.wrap(() -> {
                 TaskControlContext.set(new TaskControlContext.Ctx(taskId, controlFlagPort, taskRepo, workerId));
                 try {
                     ctx.setCurrentStepNo(def.no());
@@ -274,7 +352,7 @@ public class TaskWorker implements TaskMessageSink {
                 } finally {
                     TaskControlContext.clear();
                 }
-            });
+            }));
             StepResult result;
             try {
                 result = future.get(stepTimeout(def).toMillis(), TimeUnit.MILLISECONDS);
