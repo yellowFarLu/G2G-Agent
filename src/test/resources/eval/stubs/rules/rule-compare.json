@@ -1,0 +1,6 @@
+{
+  "steps": [
+    {"op": "compare", "params": {"left": "amount", "op": ">", "right": 1000}, "to": "overLimit"}
+  ],
+  "outputs": ["overLimit"]
+}

@@ -1,0 +1,6 @@
+{
+  "steps": [
+    {"op": "map", "params": {"from": "amount"}, "to": "mappedAmount"}
+  ],
+  "outputs": ["mappedAmount"]
+}

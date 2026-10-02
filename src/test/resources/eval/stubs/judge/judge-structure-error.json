@@ -1,0 +1,12 @@
+{
+  "id": "judge-structure-error",
+  "domain": "customs",
+  "question": "报关单商品归类申报要素包含哪些字段？",
+  "groundTruth": "商品编码、商品名称、规格型号",
+  "answer": "对的包含一些字段。",
+  "verdict": {
+    "factError": false,
+    "structureError": true
+  },
+  "reason": "录制评判：未按字段清单分点作答且关键要素缺失，结构错误；无明确错误事实陈述。"
+}

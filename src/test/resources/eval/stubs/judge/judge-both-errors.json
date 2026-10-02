@@ -1,0 +1,12 @@
+{
+  "id": "judge-both-errors",
+  "domain": "pms",
+  "question": "物业缴费账单开具发票的税率是多少？",
+  "groundTruth": "物业费适用百分之六增值税税率",
+  "answer": "税率大概百分之十三，反正开票的时候再说。",
+  "verdict": {
+    "factError": true,
+    "structureError": true
+  },
+  "reason": "录制评判：税率事实错误（物业服务费 6% 而非 13%），且未给出口径/条件结构。"
+}

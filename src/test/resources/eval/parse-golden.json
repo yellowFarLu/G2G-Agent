@@ -1,0 +1,85 @@
+[
+  {
+    "id": "parse-text-pdf-customs",
+    "kind": "pdf-text",
+    "domain": "customs",
+    "fixturePath": "synthetic://pdf/invoice-text",
+    "expects": {
+      "textContains": ["INVOICE", "12345678", "CUSTOMS"],
+      "pageCount": 1,
+      "fields": {
+        "invoiceNo": "12345678"
+      }
+    }
+  },
+  {
+    "id": "parse-scan-pdf-ocr-customs",
+    "kind": "pdf-scan-ocr",
+    "domain": "customs",
+    "fixturePath": "synthetic://pdf/blank-scan",
+    "expects": {
+      "textContains": ["EVAL-OCR", "报关单"],
+      "pageCount": 1
+    }
+  },
+  {
+    "id": "parse-encrypted-pdf-industry",
+    "kind": "pdf-encrypted",
+    "domain": "industry_solution",
+    "fixturePath": "synthetic://pdf/encrypted",
+    "password": "eval-secret",
+    "expects": {
+      "textContains": ["INDUSTRY", "2026"],
+      "pageCount": 1
+    }
+  },
+  {
+    "id": "parse-cross-page-table-customs",
+    "kind": "pdf-cross-page-table",
+    "domain": "customs",
+    "fixturePath": "synthetic://pdf/table-2pages",
+    "expects": {
+      "textContains": ["CROSS TABLE PAGE ONE", "CROSS TABLE PAGE TWO"],
+      "tableRows": 3,
+      "pageCount": 2
+    },
+    "_note_table": "中文单元格内容（商品编码/工业轴承/密封胶条）由录制 TABLE 桩返回，评测器对跨页拼接单元格另做断言（HELVETICA 标准字体不支持中文文本层）"
+  },
+  {
+    "id": "parse-image-ocr-settlement",
+    "kind": "image-ocr",
+    "domain": "settlement",
+    "fixturePath": "synthetic://image/png",
+    "expects": {
+      "textContains": ["EVAL-OCR", "结算单"]
+    }
+  },
+  {
+    "id": "parse-audio-asr-settlement",
+    "kind": "audio-asr",
+    "domain": "settlement",
+    "fixturePath": "synthetic://audio/mp3",
+    "expects": {
+      "textContains": ["评测", "转写"]
+    }
+  },
+  {
+    "id": "parse-legacy-doc-pms",
+    "kind": "doc-tika",
+    "domain": "pms",
+    "fixturePath": "classpath:fixtures/parse/legacy.doc",
+    "expects": {
+      "textContains": ["旧版 Word 文档测试内容"]
+    }
+  },
+  {
+    "id": "parse-real-scan-tiff-missing",
+    "kind": "image-tiff-real-scan",
+    "domain": "customs",
+    "fixturePath": "classpath:fixtures/parse/real-customs-scan.tiff",
+    "expects": {
+      "textContains": []
+    },
+    "skipReason": "真实报关扫描 TIFF 固件缺失；受铁律约束不新建二进制夹具，待业务录制补齐后转为有效样本（不占用 ≥5 有效条数）"
+  }
+]

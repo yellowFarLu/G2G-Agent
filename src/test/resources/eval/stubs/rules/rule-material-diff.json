@@ -1,0 +1,6 @@
+{
+  "steps": [
+    {"op": "materialDiff", "params": {"left": "materialA", "right": "materialB"}, "to": "diffs"}
+  ],
+  "outputs": ["diffs"]
+}

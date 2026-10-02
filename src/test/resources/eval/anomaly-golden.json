@@ -1,0 +1,61 @@
+[
+  {
+    "id": "anomaly-encrypted-no-password",
+    "scenario": "ENCRYPTED",
+    "domain": "industry_solution",
+    "expects": {
+      "taskStatus": "WAITING_HUMAN",
+      "humanKind": "DECRYPT"
+    },
+    "note": "加密 PDF 无口令：真实 RichDocumentParser 抛 EncryptedDocumentException，分类器映射建 DECRYPT 人工任务"
+  },
+  {
+    "id": "anomaly-encrypted-wrong-password",
+    "scenario": "ENCRYPTED",
+    "domain": "customs",
+    "expects": {
+      "taskStatus": "WAITING_HUMAN",
+      "humanKind": "DECRYPT"
+    },
+    "note": "错误口令 passwordRejected=true 仍走 DECRYPT（表单提示口令错误），不致命失败"
+  },
+  {
+    "id": "anomaly-corrupt-pdf",
+    "scenario": "CORRUPT",
+    "domain": "customs",
+    "expects": {
+      "taskStatus": "FAILED",
+      "errorCode": "PARSE_FAILED"
+    },
+    "note": "非 PDF 字节流：真实解析抛 IllegalStateException → PARSE_FAILED（致命不重试）"
+  },
+  {
+    "id": "anomaly-oversize-file",
+    "scenario": "OVERSIZE",
+    "domain": "settlement",
+    "expects": {
+      "taskStatus": "FAILED",
+      "errorCode": "VALIDATION_FAILED"
+    },
+    "note": "2MB 合成载荷 + maxFileMb=1：ParseInputValidator 抛 IllegalArgumentException → VALIDATION_FAILED"
+  },
+  {
+    "id": "anomaly-low-confidence-review",
+    "scenario": "LOW_CONFIDENCE",
+    "domain": "settlement",
+    "expects": {
+      "taskStatus": "WAITING_HUMAN",
+      "humanKind": "REVIEW"
+    },
+    "note": "真实 FieldExtractionService + 录制固件 invoice-low-confidence.json：needsReview=true → REVIEW 人工任务"
+  },
+  {
+    "id": "anomaly-review-reject-resume",
+    "scenario": "REVIEW_REJECT",
+    "domain": "customs",
+    "expects": {
+      "taskStatus": "RUNNING"
+    },
+    "note": "复核案件 REJECT 处置后人工任务 resolve，worker 恢复流水线（留痕但不新建人工任务、不判失败）"
+  }
+]
