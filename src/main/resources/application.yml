@@ -311,7 +311,9 @@ wikiagent:
       qwen-plus: "0.0008:0.002"
       qwen-max: "0.02:0.06"
   rerank:
-    enabled: ${WIKIAGENT_RERANK_ENABLED:false}   # DashScope rerank 首批适配位，默认关闭
+    # DashScope rerank 实装，默认开启；无 API Key 时 provider.available()=false 自动跳过，
+    # 调用失败由上层保持原序降级（不产生硬依赖）
+    enabled: ${WIKIAGENT_RERANK_ENABLED:true}
     model: gte-rerank
     base-url: ${WIKIAGENT_RERANK_BASE_URL:https://dashscope.aliyuncs.com/api/v1/services/rerank/text-rerank/text-rerank}
   cache:

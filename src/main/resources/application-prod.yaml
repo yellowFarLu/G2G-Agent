@@ -96,7 +96,9 @@ wikiagent:
     # 受控：默认 none（不静默调用 AI 解析）；启用必须由部署显式选择 provider
     provider: ${WIKIAGENT_PARSE_PROVIDER:none}
   rerank:
-    enabled: ${WIKIAGENT_RERANK_ENABLED:false}
+    # 默认开启（需求4重排能力实装）；无 DASHSCOPE_API_KEY 时 available()=false 自动跳过，
+    # 调用异常保持原检索序降级，可用 WIKIAGENT_RERANK_ENABLED=false 显式关闭
+    enabled: ${WIKIAGENT_RERANK_ENABLED:true}
   cache:
     answer:
       enabled: ${WIKIAGENT_CACHE_ANSWER_ENABLED:false}   # 答案缓存默认关（防幻觉），受控开启

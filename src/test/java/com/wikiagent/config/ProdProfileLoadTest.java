@@ -61,8 +61,9 @@ class ProdProfileLoadTest {
             assertThat(ProfilePropertySupport.raw(env, "wikiagent.routing.mock-intents-enabled")).isEqualTo("false");
             assertThat(ProfilePropertySupport.raw(env, "wikiagent.parse.provider"))
                     .isEqualTo("${WIKIAGENT_PARSE_PROVIDER:none}");
+            // rerank 默认开启（需求4重排实装）；无 API Key 时 provider 不可用自动降级，可显式关闭
             assertThat(ProfilePropertySupport.raw(env, "wikiagent.rerank.enabled"))
-                    .isEqualTo("${WIKIAGENT_RERANK_ENABLED:false}");
+                    .isEqualTo("${WIKIAGENT_RERANK_ENABLED:true}");
 
             // === actuator 仅 health/info/prometheus；错误响应不回显细节 ===
             assertThat(ProfilePropertySupport.raw(env, "management.endpoints.web.exposure.include"))

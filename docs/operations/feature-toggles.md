@@ -19,7 +19,7 @@
 | `wikiagent.redis.enabled` | `false` | `REDIS_ENABLED` | Redis 总开关；false 时自动排除 Redisson 自动装配，降级为 JVM 本地协调/限流/记忆 | 中：单机可用，失去分布式能力 |
 | `wikiagent.task.mq` | `local` | `TASK_MQ` | 任务消息队列：`local`=JVM 线程池调度；`rocketmq`=RocketMQ | 中：local 仅单机可用 |
 | `wikiagent.parse.provider` | `none` | `WIKIAGENT_PARSE_PROVIDER` | 文档解析提供者：`none`=禁用；`dashscope`=DashScope 多模态 | 中：none 时上传后仅纯文本 |
-| `wikiagent.rerank.enabled` | `false` | `WIKIAGENT_RERANK_ENABLED` | 重排序开关 | 低 |
+| `wikiagent.rerank.enabled` | `true` | `WIKIAGENT_RERANK_ENABLED` | 重排序开关（DashScope rerank 实装）；无 API Key 时自动跳过、调用失败保持原序降级 | 低 |
 | `wikiagent.cache.answer.enabled` | `false` | `WIKIAGENT_CACHE_ANSWER_ENABLED` | 答案缓存；false 防幻觉（推荐生产默认关） | 低 |
 
 ## 三、安全与可观测性开关
