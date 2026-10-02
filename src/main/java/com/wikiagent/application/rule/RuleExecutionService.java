@@ -14,7 +14,6 @@ import com.wikiagent.domain.rule.dsl.DeterministicRuleEngine;
 import com.wikiagent.domain.rule.dsl.RuleEngineException;
 import com.wikiagent.domain.rule.dsl.RuleOutcome;
 import com.wikiagent.domain.rule.dsl.RuleProgram;
-import com.wikiagent.dto.ConflictException;
 import com.wikiagent.dto.NotFoundException;
 import com.wikiagent.entity.rule.RuleComputationEntity;
 import com.wikiagent.repo.rule.RuleComputationRepo;
@@ -64,7 +63,11 @@ public class RuleExecutionService {
                 .filter(r -> r.status() == RuleStatus.ACTIVE)
                 .findFirst()
                 .orElseThrow(() -> new NotFoundException("规则无 ACTIVE 版本: " + code));
-        return doExecute(active, docId, input);
+        RuleComputation comp = doExecute(active, docId, input);
+        if (docId != null && comp.status() == RuleComputation.ComputationStatus.SUCCESS) {
+            checkMaterialDiff(docId, code, comp);
+        }
+        return comp;
     }
 
     /**
@@ -77,7 +80,6 @@ public class RuleExecutionService {
             return comp;
         }
         applyOutputs(docId, code, comp.ruleVersion(), parseJsonMap(comp.outputJson()));
-        checkMaterialDiff(docId, code, comp);
         return comp;
     }
 
