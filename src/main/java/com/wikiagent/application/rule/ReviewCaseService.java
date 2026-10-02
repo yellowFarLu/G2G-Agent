@@ -194,6 +194,14 @@ public class ReviewCaseService {
             return;
         }
         List<HumanTask> tasks = humanTaskRepo.findByTaskId(e.getTaskId());
+        // 复核闸门：同一任务仍有 OPEN 案件时，本次处置只留痕不恢复流水线，
+        // 待最后一个案件处置后再 RESUME，避免未复核字段随文档入库。
+        boolean stillOpen = repo.findByTaskIdAndStatus(e.getTaskId(),
+                ReviewCase.ReviewCaseStatus.OPEN.name()).stream()
+                .anyMatch(c -> !c.getId().equals(e.getId()));
+        if (stillOpen) {
+            return;
+        }
         for (HumanTask ht : tasks) {
             if (ht.kind() == HumanTaskKind.REVIEW
                     && (ht.status() == HumanTaskStatus.OPEN || ht.status() == HumanTaskStatus.CLAIMED)) {

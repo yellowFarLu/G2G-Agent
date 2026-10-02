@@ -66,9 +66,15 @@ public class HumanTaskService {
     }
 
     /**
-     * 处置：INPUT / TOOL_APPROVAL → formValue 落库 + 任务 WAITING_HUMAN→PENDING（RESUME）+ 投递
-     * （投递在事务提交后执行；TOOL_APPROVAL 的批准/驳回决策由 worker 经 humanInputs.toolApprovals
-     * 并入上下文，F3）；DIRECT_RESOLVE → 任务 HUMAN_RESOLVE → COMPLETED + resultRef。
+     * 处置：INPUT / REVIEW / TOOL_APPROVAL → formValue 落库 + 任务 WAITING_HUMAN→PENDING（RESUME）+ 投递
+     * （投递在事务提交后执行）：
+     * <ul>
+     *   <li>INPUT/DECRYPT：表单值由 worker humanInputs 并入上下文续跑；</li>
+     *   <li>REVIEW：字段经 review_case 处置定稿，worker 在 EXTRACT 步骤识别 RESOLVED REVIEW 后
+     *       跳过 LLM 重抽取，继续 CLEAN/SPLIT/EMBED/VERIFY（不可直接终结，否则文档永不入库）；</li>
+     *   <li>TOOL_APPROVAL：批准/驳回决策由 AgentTaskHandler.approvalDecisionsOf 从 RESOLVED 人工任务读回。</li>
+     * </ul>
+     * DIRECT_RESOLVE → 任务 HUMAN_RESOLVE → COMPLETED + resultRef。
      */
     @Transactional
     public TaskInstance resolve(Long id, String userId, HumanTaskKind kind, JsonNode formValue,
@@ -86,7 +92,10 @@ public class HumanTaskService {
         humanRepo.resolve(id, userId, formValue, kind);
         eventRepo.append(new TaskEvent(ht.taskId(), TaskEventType.HUMAN_RESOLVE, ActorType.USER, userId,
                 null, Instant.now()));
-        if (kind == HumanTaskKind.INPUT || kind == HumanTaskKind.TOOL_APPROVAL) {
+        if (kind == HumanTaskKind.INPUT
+                || kind == HumanTaskKind.DECRYPT
+                || kind == HumanTaskKind.TOOL_APPROVAL
+                || kind == HumanTaskKind.REVIEW) {
             TaskInstance updated = task
                     .withStatus(TaskStateMachine.transition(task.status(), TaskEventType.RESUME))
                     .withClearLease();
