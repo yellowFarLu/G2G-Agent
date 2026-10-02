@@ -34,6 +34,9 @@ import java.util.List;
 /**
  * 文档入库任务处理器（taskType=INGEST）。
  * <p>
+ * 【边界标记】{@link com.wikiagent.domain.task.BoundaryType#FIXED_HANDLER} — 固定步骤处理器，
+ * 步骤号冻结（1-6 + 100+），不走 ReAct，不涉及 LLM 自主决策。
+ * <p>
  * 基础六步（所有介质）：DOWNLOAD → PARSE → CLEAN → SPLIT → EMBED_AND_PERSIST → INDEX_VERIFY。
  * 条件动态步骤（大编号段 100+，沿用 AgentTaskHandler 模式）：
  * <ul>

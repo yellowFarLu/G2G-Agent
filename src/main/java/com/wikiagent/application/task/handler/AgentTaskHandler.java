@@ -39,6 +39,9 @@ import java.util.Map;
 /**
  * Agent(PERO) 任务处理器（taskType=AGENT，Task 12）。
  * <p>
+ * 【边界标记】{@link com.wikiagent.domain.task.BoundaryType#AGENT} — Agent 自主决策路径，
+ * 节点内 ReAct 循环，需 F1 工具权限 + F2 任务预算 + F3 工具批准 全链路治理。
+ * <p>
  * 步骤语义（A 阶段冻结）：{@code PLAN}(感知+规划，checkpoint 存整份 plan JSON)
  * → 每个_PLANStep 动态注册 {@code NODE_{i}} 步（单节点执行 executeLoop，
  * 暂停/取消在节点开始前与每次 ReAct 迭代顶部生效）

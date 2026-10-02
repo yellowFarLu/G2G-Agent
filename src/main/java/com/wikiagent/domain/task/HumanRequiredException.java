@@ -2,6 +2,9 @@ package com.wikiagent.domain.task;
 
 /**
  * 人工接管请求：handler 判定需要人工介入时抛出，worker 建 human_task 并置 WAITING_HUMAN。
+ * <p>
+ * 【边界标记】{@link BoundaryType#HUMAN} — 人工接管边界。所有 throw new HumanRequiredException
+ * 的调用点即 HUMAN 边界：任务在此处暂停，等待人工输入/批准/处置后续跑。
  */
 public class HumanRequiredException extends RuntimeException {
 
