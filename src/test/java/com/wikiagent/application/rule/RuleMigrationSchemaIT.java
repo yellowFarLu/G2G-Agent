@@ -74,8 +74,8 @@ class RuleMigrationSchemaIT {
     @Test
     void flywayMarkedV13ToV15Success() {
         Integer success = jdbc.queryForObject("""
-                select count(*) from flyway_schema_history
-                where success = true and version in ('13', '14', '15')
+                select count(*) from "flyway_schema_history"
+                where "success" = true and "version" in ('13', '14', '15')
                 """, Integer.class);
         assertThat(success).isEqualTo(3);
     }
