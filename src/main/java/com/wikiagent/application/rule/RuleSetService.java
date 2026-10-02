@@ -47,20 +47,29 @@ public class RuleSetService {
 
     @Transactional
     public RuleSet publish(String code, int version) {
-        RuleSetEntity target = repo.findByCodeAndVersion(code, version)
+        // #6：先 FOR UPDATE 锁定同 code 全部行再做状态迁移。
+        // 两个并发发布在同一行集合上排队，后持有者读到的已是最新提交状态，
+        // 从根上消除 check-then-save 竞态（修复前可出现同 code 两条 ACTIVE）。
+        List<RuleSetEntity> locked = repo.findLockByCode(code);
+        RuleSetEntity target = locked.stream()
+                .filter(x -> x.getVersion() == version)
+                .findFirst()
                 .orElseThrow(() -> new NotFoundException("规则不存在: " + code + " v" + version));
         if (target.getStatus().equals(RuleStatus.ACTIVE.name())) {
             throw new ConflictException("规则已是 ACTIVE 状态");
         }
+        Instant now = Instant.now();
         // 同 code 其他 ACTIVE 转 ARCHIVED
-        for (RuleSetEntity e : repo.findByCodeAndStatus(code, RuleStatus.ACTIVE.name())) {
-            e.setStatus(RuleStatus.ARCHIVED.name());
-            e.setUpdatedAt(Instant.now());
-            repo.save(e);
+        for (RuleSetEntity e : locked) {
+            if (e.getStatus().equals(RuleStatus.ACTIVE.name())) {
+                e.setStatus(RuleStatus.ARCHIVED.name());
+                e.setUpdatedAt(now);
+                repo.save(e);
+            }
         }
         target.setStatus(RuleStatus.ACTIVE.name());
-        target.setPublishedAt(Instant.now());
-        target.setUpdatedAt(Instant.now());
+        target.setPublishedAt(now);
+        target.setUpdatedAt(now);
         return toDomain(repo.save(target));
     }
 
