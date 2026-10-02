@@ -16,6 +16,7 @@ import com.wikiagent.service.retrieve.QueryRewriteService;
 import com.wikiagent.service.retrieve.RetrievalService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.slf4j.MDC;
 import org.springframework.ai.chat.messages.SystemMessage;
 import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.ai.chat.metadata.Usage;
@@ -236,14 +237,26 @@ public class AgentRagService {
         }
 
         // 4. 证据充分：组装证据流式生成
-        traceRecorder.record(userId, sessionId, "agent-rag-generate", "generate",
-                question, "sources=" + result.sources().size(), "OK", null);
-        sse.send("stage", Map.of("stage", "generating"));
         RenderedPrompt sys = PromptComposer.systemPrompt(templateService);
         RenderedPrompt usr = PromptComposer.userPrompt(templateService, result.context(), question);
+        // 缺陷13：把实际命中的提示词模板 code@version 写 INFO 并挂到 generate span，
+        // 便于回溯某次回答用了哪版提示词（version=-1 为静态兜底拼接）
+        String promptRef = promptVersionRef(PromptComposer.CODE_CHAT_SYSTEM, sys.version())
+                + "," + promptVersionRef(PromptComposer.CODE_CHAT_USER, usr.version());
+        log.info("生成提示词版本 traceId={} userId={} sessionId={} sources={} prompt={}",
+                MDC.get("traceId"), userId, sessionId, result.sources().size(), promptRef);
+        traceRecorder.record(userId, sessionId, "agent-rag-generate", "generate",
+                question, "sources=" + result.sources().size() + ", prompt=" + promptRef,
+                "OK", null);
+        sse.send("stage", Map.of("stage", "generating"));
         streamer.stream(new Prompt(List.of(
                 new SystemMessage(sys.content()),
                 new UserMessage(usr.content()))), sse, null, userId, sessionId);
+    }
+
+    /** 缺陷13：提示词版本引用串，如 {@code chat.system@v3}；未命中模板（version=-1）标 @fallback。 */
+    private static String promptVersionRef(String code, int version) {
+        return code + (version < 0 ? "@fallback" : "@v" + version);
     }
 
     /** 路由+规划：LLM 调用失败或输出异常时降级为 search + 原始问题。 */
