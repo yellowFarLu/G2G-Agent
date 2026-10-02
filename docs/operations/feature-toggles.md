@@ -55,9 +55,9 @@
 | `MILVUS_PASSWORD` | Milvus 密码 | — |
 | `WIKIAGENT_INTERNAL_SECRET` | X-User-Id 共享密钥（trust-boundary 启用时必填） | — |
 | `DASHSCOPE_API_KEY` | DashScope API Key（真实 LLM 调用时） | — |
-| `SPRING_DATASOURCE_URL` | MySQL JDBC URL | `jdbc:mysql://...` |
-| `SPRING_DATASOURCE_USERNAME` | 数据库用户名 | — |
-| `SPRING_DATASOURCE_PASSWORD` | 数据库密码 | — |
+| `MYSQL_URL` | MySQL JDBC URL | `jdbc:mysql://...` |
+| `MYSQL_USER` | 数据库用户名 | — |
+| `MYSQL_PASSWORD` | 数据库密码 | — |
 
 ## 六、/actuator/env 可见性
 
