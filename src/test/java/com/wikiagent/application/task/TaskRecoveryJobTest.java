@@ -44,8 +44,16 @@ class TaskRecoveryJobTest {
         @Bean
         @Primary
         TaskDispatcherPort recordingDispatcher() {
-            return new RecordingDispatcher();
+            return RECORDING;
         }
+    }
+
+    /** I1 trace 代理会把注入 Bean 包成 JDK 代理，测试直接持有原始实例。 */
+    static final RecordingDispatcher RECORDING = new RecordingDispatcher();
+
+    @org.junit.jupiter.api.BeforeEach
+    void resetRecording() {
+        RECORDING.dispatched.clear();
     }
 
     static class RecordingDispatcher implements TaskDispatcherPort {
@@ -89,7 +97,7 @@ class TaskRecoveryJobTest {
     void recoversExpiredLeaseWithRetry() {
         String taskId = "tsk_t9rec_" + uid();
         repo.save(runningTask(taskId, "T9REC", 1, Instant.now().minusSeconds(10)));
-        RecordingDispatcher rec = (RecordingDispatcher) dispatcher;
+        RecordingDispatcher rec = RECORDING;
 
         job.runOnce();
 
@@ -108,7 +116,7 @@ class TaskRecoveryJobTest {
     void failsWhenRetriesExhausted() {
         String taskId = "tsk_t9rec_" + uid();
         repo.save(runningTask(taskId, "T9REC", 3, Instant.now().minusSeconds(10)));
-        RecordingDispatcher rec = (RecordingDispatcher) dispatcher;
+        RecordingDispatcher rec = RECORDING;
         int before = rec.dispatched.size();
 
         job.runOnce();

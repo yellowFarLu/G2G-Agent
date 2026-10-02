@@ -49,8 +49,17 @@ class TaskSubmissionServiceTest {
         @Bean
         @Primary
         TaskDispatcherPort recordingDispatcher() {
-            return new RecordingDispatcher();
+            return RECORDING;
         }
+    }
+
+    /** I1 trace 代理会把注入 Bean 包成 JDK 代理，测试直接持有原始实例。 */
+    static final RecordingDispatcher RECORDING = new RecordingDispatcher();
+
+    @org.junit.jupiter.api.BeforeEach
+    void resetRecording() {
+        RECORDING.dispatched.clear();
+        RECORDING.failNext = false;
     }
 
     static class RecordingDispatcher implements TaskDispatcherPort {
@@ -95,7 +104,7 @@ class TaskSubmissionServiceTest {
 
         assertThat(t.taskId()).startsWith("tsk_");
         assertThat(t.status()).isEqualTo(TaskStatus.PENDING);
-        RecordingDispatcher rec = (RecordingDispatcher) dispatcher;
+        RecordingDispatcher rec = RECORDING;
         assertThat(rec.dispatched).contains(t.taskId() + ":T9SUB:0");
         TaskEvent submitEvent = eventRepo.findByTaskId(t.taskId()).stream()
                 .filter(e -> e.eventType() == TaskEventType.SUBMIT).findFirst().orElseThrow();
@@ -110,7 +119,7 @@ class TaskSubmissionServiceTest {
         TaskPayload p = new TaskPayload("T9SUB", bizKey, "user-1", null, null,
                 mapper.createObjectNode(), null, null);
         TaskInstance first = service.submit(p);
-        RecordingDispatcher rec = (RecordingDispatcher) dispatcher;
+        RecordingDispatcher rec = RECORDING;
         int dispatchedAfterFirst = (int) rec.dispatched.stream()
                 .filter(d -> d.startsWith(first.taskId() + ":")).count();
 
@@ -127,7 +136,7 @@ class TaskSubmissionServiceTest {
     void dispatchFailureStillSubmits() {
         TaskPayload p = new TaskPayload("T9SUB", "biz-sub-fail-" + uid(), "user-1", null, null,
                 mapper.createObjectNode(), null, null);
-        RecordingDispatcher rec = (RecordingDispatcher) dispatcher;
+        RecordingDispatcher rec = RECORDING;
         rec.failNext = true;
         try {
             TaskInstance t = service.submit(p);
@@ -176,7 +185,7 @@ class TaskSubmissionServiceTest {
     void replayFailedTaskResetsAndRedispatches() {
         String taskId = "tsk_t9replay_" + uid();
         repo.save(failedTask(taskId, "T9SUB"));
-        RecordingDispatcher rec = (RecordingDispatcher) dispatcher;
+        RecordingDispatcher rec = RECORDING;
         int before = rec.dispatched.size();
 
         TaskInstance replayed = service.replay(taskId, "admin-1");

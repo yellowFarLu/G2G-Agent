@@ -41,8 +41,20 @@ class DispatchCompensationJobTest {
         @Bean
         @Primary
         TaskDispatcherPort recordingDispatcher() {
-            return new RecordingDispatcher();
+            return RECORDING;
         }
+    }
+
+    /**
+     * 静态实例：I3 背压 BeanPostProcessor 可能对 TaskDispatcherPort 做 JDK 动态代理，
+     * 注入的 Bean 强转回实现类会 ClassCastException；测试直接持有原始实例。
+     */
+    static final RecordingDispatcher RECORDING = new RecordingDispatcher();
+
+    @org.junit.jupiter.api.BeforeEach
+    void resetRecording() {
+        RECORDING.dispatched.clear();
+        RECORDING.watchdogs.clear();
     }
 
     static class RecordingDispatcher implements TaskDispatcherPort {
@@ -81,7 +93,7 @@ class DispatchCompensationJobTest {
 
     @Test
     void stuckPendingTaskIsRedispatchedAndMarkedEnqueued() {
-        RecordingDispatcher rec = (RecordingDispatcher) dispatcher;
+        RecordingDispatcher rec = RECORDING;
         String taskId = "tsk_t7_" + uid();
         taskRepository.save(task(taskId, TaskStatus.PENDING, "tn-a-" + uid(),
                 Instant.now().minusSeconds(60), null));
@@ -96,7 +108,7 @@ class DispatchCompensationJobTest {
 
     @Test
     void tenantAtConcurrencyLimitIsSkipped() {
-        RecordingDispatcher rec = (RecordingDispatcher) dispatcher;
+        RecordingDispatcher rec = RECORDING;
         String tenant = "tn-b-" + uid();
         taskRepository.save(task("tsk_t7_run_" + uid(), TaskStatus.RUNNING, tenant,
                 Instant.now(), Instant.now()));
@@ -111,7 +123,7 @@ class DispatchCompensationJobTest {
 
     @Test
     void futureTaskIsNotDispatched() {
-        RecordingDispatcher rec = (RecordingDispatcher) dispatcher;
+        RecordingDispatcher rec = RECORDING;
         String taskId = "tsk_t7_" + uid();
         taskRepository.save(task(taskId, TaskStatus.PENDING, "tn-c-" + uid(),
                 Instant.now().plusSeconds(600), null));

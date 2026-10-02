@@ -60,8 +60,16 @@ class TaskWorkerTest {
         @Bean
         @Primary
         TaskDispatcherPort recordingDispatcher() {
-            return new RecordingDispatcher();
+            return RECORDING;
         }
+    }
+
+    /** I1 trace 代理会把注入 Bean 包成 JDK 代理，测试直接持有原始实例。 */
+    static final RecordingDispatcher RECORDING = new RecordingDispatcher();
+
+    @org.junit.jupiter.api.BeforeEach
+    void resetRecording() {
+        RECORDING.dispatched.clear();
     }
 
     static class RecordingDispatcher implements TaskDispatcherPort {
@@ -238,7 +246,7 @@ class TaskWorkerTest {
                 });
         handlerRef.set(handler);
         registry.register(handler);
-        RecordingDispatcher rec = (RecordingDispatcher) dispatcher;
+        RecordingDispatcher rec = RECORDING;
 
         worker.onMessage(taskId, "T8RETRY");  // attempt0 失败 → RETRY → PENDING(attempt=1)
         assertThat(rec.dispatched).contains(taskId + ":T8RETRY:3");
@@ -267,7 +275,7 @@ class TaskWorkerTest {
                     throw new com.wikiagent.domain.task.FatalTaskException(ErrorCode.VALIDATION_FAILED, "参数校验失败");
                 });
         registry.register(handler);
-        RecordingDispatcher rec = (RecordingDispatcher) dispatcher;
+        RecordingDispatcher rec = RECORDING;
         int before = normalDispatchCount(rec);
 
         worker.onMessage(taskId, "T8FATAL");
@@ -432,7 +440,7 @@ class TaskWorkerTest {
         registry.register(handler);
         stepRepo.saveAllIfAbsent(taskId, plan);
         stepRepo.markDone(taskId, 1, "{坏json", Instant.now());
-        RecordingDispatcher rec = (RecordingDispatcher) dispatcher;
+        RecordingDispatcher rec = RECORDING;
         int before = normalDispatchCount(rec);
 
         worker.onMessage(taskId, "T8CORRUPT");
