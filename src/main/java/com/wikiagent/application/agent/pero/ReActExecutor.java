@@ -151,17 +151,37 @@ public class ReActExecutor {
                 auditToolDenied(action.name(), governance, denyReason);
                 log.warn("ReAct step {} iter {} 工具 {} 权限拒绝: {}", step.id(), i + 1, action.name(), denyReason);
             } else {
-                try {
-                    observation = toolExecutor.invoke(action, ctx);
-                } catch (Exception e) {
-                    observation = "ERROR: " + e.getMessage();
-                    log.warn("ReAct step {} iter {} 工具 {} 调用失败: {}",
-                            step.id(), i + 1, action.name(), e.getMessage());
+                // F3：高危工具人工批准门（TOOL_APPROVAL）。未决 → 抛人工接管（worker 建单 +
+                // WAITING_HUMAN，resolve 后续跑时决策经 approvalDecisions 回传）；
+                // 批准 → 放行执行；驳回 → 跳过该工具，observation 标记 TOOL_REJECTED_BY_USER
+                Boolean approval = approvalDecisionOf(action.name(), governance);
+                if (approval == null) {
+                    throw new HumanRequiredException(HumanTaskKind.TOOL_APPROVAL, "工具批准",
+                            "高危工具 " + action.name() + " 需人工批准后执行",
+                            buildApprovalFormSchema(action.name()));
+                }
+                if (!approval) {
+                    observation = "TOOL_REJECTED_BY_USER";
+                    log.info("ReAct step {} iter {} 工具 {} 被人工驳回，跳过执行", step.id(), i + 1, action.name());
+                } else {
+                    try {
+                        observation = toolExecutor.invoke(action, ctx);
+                    } catch (Exception e) {
+                        observation = "ERROR: " + e.getMessage();
+                        log.warn("ReAct step {} iter {} 工具 {} 调用失败: {}",
+                                step.id(), i + 1, action.name(), e.getMessage());
+                    }
                 }
             }
             traceList.add(ra.toTAO(observation));
             trace.end(sub, observation, "OK", null);
-            prompt = appendObservation(prompt, ra.thought(), action, observation);
+            // F3：上下文压缩——轨迹超阈值时重建 prompt（早期轮折叠为摘要占位），
+            // 否则增量追加本轮观测
+            if (traceList.size() > COMPACT_THRESHOLD) {
+                prompt = buildReActPrompt(step, ctx, allowedTools, compactedTrace(traceList));
+            } else {
+                prompt = appendObservation(prompt, ra.thought(), action, observation);
+            }
         }
 
         log.warn("ReAct step {} 达到 maxIter={} 仍未结束，返回 truncated", step.id(), limit);
@@ -267,6 +287,56 @@ public class ReActExecutor {
         } catch (Exception e) {
             log.warn("预算记账失败（不阻断执行）: {}", e.getMessage());
         }
+    }
+
+    /** F3：上下文压缩阈值——轨迹超过该轮数后，早期轮次在 prompt 中折叠为摘要占位。 */
+    static final int COMPACT_THRESHOLD = 10;
+
+    /** F3：压缩时保留最近 N 轮原文。 */
+    static final int COMPACT_KEEP_RECENT = 5;
+
+    /**
+     * F3：高危工具批准门。
+     *
+     * @return TRUE=放行（不需批准或已批准）；FALSE=已驳回（跳过执行）；null=需批准但未决（抛人工接管）
+     */
+    private Boolean approvalDecisionOf(String toolName, ReActGovernance governance) {
+        if (permissionRegistry == null || governance == null
+                || !permissionRegistry.requiresApproval(toolName)) {
+            return Boolean.TRUE;
+        }
+        Map<String, Boolean> decisions = governance.approvalDecisions();
+        return decisions == null ? null : decisions.get(toolName);
+    }
+
+    /** F3：TOOL_APPROVAL 表单 schema。toolName 供 worker/任务处理器回读决策归属键。 */
+    private static com.fasterxml.jackson.databind.JsonNode buildApprovalFormSchema(String toolName) {
+        var schema = new com.fasterxml.jackson.databind.ObjectMapper().createObjectNode();
+        schema.put("toolName", toolName);
+        schema.put("approve", "boolean(true=批准执行 / false=驳回跳过)");
+        return schema;
+    }
+
+    /**
+     * F3：上下文压缩。迭代轨迹超 {@value #COMPACT_THRESHOLD} 轮时，早期 TAO 折叠为单条
+     * COMPRESSED 摘要（仅保留动作名序列），最近 {@value #COMPACT_KEEP_RECENT} 轮保留原文。
+     * 只影响后续 prompt（防上下文膨胀），不改变 {@link ReActResult} 携带的完整轨迹。
+     */
+    static List<ThoughtActionObservation> compactedTrace(List<ThoughtActionObservation> trace) {
+        if (trace.size() <= COMPACT_THRESHOLD) {
+            return trace;
+        }
+        int keep = COMPACT_KEEP_RECENT;
+        List<ThoughtActionObservation> early = trace.subList(0, trace.size() - keep);
+        StringBuilder summary = new StringBuilder("早期 ").append(early.size())
+                .append(" 轮轨迹已压缩，动作序列：");
+        for (ThoughtActionObservation t : early) {
+            summary.append('[').append(t.actionName()).append(']');
+        }
+        List<ThoughtActionObservation> out = new ArrayList<>(keep + 1);
+        out.add(new ThoughtActionObservation(summary.toString(), "COMPRESSED", null, "（已压缩占位）"));
+        out.addAll(trace.subList(trace.size() - keep, trace.size()));
+        return out;
     }
 
     /** F1：TOOL_DENIED 审计落库（eventType=TOOL_DENIED，含 toolName/userId/reason）。 */

@@ -66,8 +66,9 @@ public class HumanTaskService {
     }
 
     /**
-     * 处置：INPUT → formValue 落库 + 任务 WAITING_HUMAN→PENDING（RESUME）+ 投递
-     * （投递在事务提交后执行）；DIRECT_RESOLVE → 任务 HUMAN_RESOLVE → COMPLETED + resultRef。
+     * 处置：INPUT / TOOL_APPROVAL → formValue 落库 + 任务 WAITING_HUMAN→PENDING（RESUME）+ 投递
+     * （投递在事务提交后执行；TOOL_APPROVAL 的批准/驳回决策由 worker 经 humanInputs.toolApprovals
+     * 并入上下文，F3）；DIRECT_RESOLVE → 任务 HUMAN_RESOLVE → COMPLETED + resultRef。
      */
     @Transactional
     public TaskInstance resolve(Long id, String userId, HumanTaskKind kind, JsonNode formValue,
@@ -85,7 +86,7 @@ public class HumanTaskService {
         humanRepo.resolve(id, userId, formValue, kind);
         eventRepo.append(new TaskEvent(ht.taskId(), TaskEventType.HUMAN_RESOLVE, ActorType.USER, userId,
                 null, Instant.now()));
-        if (kind == HumanTaskKind.INPUT) {
+        if (kind == HumanTaskKind.INPUT || kind == HumanTaskKind.TOOL_APPROVAL) {
             TaskInstance updated = task
                     .withStatus(TaskStateMachine.transition(task.status(), TaskEventType.RESUME))
                     .withClearLease();

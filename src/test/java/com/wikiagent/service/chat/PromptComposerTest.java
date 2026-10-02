@@ -66,7 +66,7 @@ class PromptComposerTest {
     @Test
     void 模板感知用户提示词命中模板渲染占位符() {
         PromptTemplateService svc = mock(PromptTemplateService.class);
-        String tmpl = "参考资料：{context}\n\n问题：{question}\n请回答。";
+        String tmpl = "参考资料：ctx\n\n问题：qst\n请回答。";
         when(svc.render("chat.user", Map.of("context", "ctx", "question", "qst")))
                 .thenReturn(Optional.of(new RenderedPrompt(tmpl, 3)));
 

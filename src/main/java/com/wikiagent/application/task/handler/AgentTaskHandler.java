@@ -25,13 +25,16 @@ import com.wikiagent.domain.task.StepDef;
 import com.wikiagent.domain.task.StepResult;
 import com.wikiagent.domain.task.TaskExecutionContext;
 import com.wikiagent.domain.task.TaskHandler;
+import com.wikiagent.domain.task.ports.HumanTaskRepositoryPort;
 import com.wikiagent.application.agent.pero.Handover;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
 
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 /**
  * Agent(PERO) 任务处理器（taskType=AGENT，Task 12）。
@@ -66,20 +69,30 @@ public class AgentTaskHandler implements TaskHandler {
     private final ToolPermissionRegistry permissionRegistry;
     /** F2：预算持久化端口（worker 注入；缺省时预算仅在内存计量不落库）。 */
     private final TaskBudgetPersistencePort budgetPersistence;
+    /** F3：人工任务仓储（读 RESOLVED TOOL_APPROVAL 决策；可为 null，缺省时审批门恒未决）。 */
+    private final HumanTaskRepositoryPort humanRepo;
 
     public AgentTaskHandler(PeroAgent peroAgent, Handover handover, TaskStreamBus streamBus) {
-        this(peroAgent, handover, streamBus, null, null);
+        this(peroAgent, handover, streamBus, null, null, null);
+    }
+
+    public AgentTaskHandler(PeroAgent peroAgent, Handover handover, TaskStreamBus streamBus,
+                            ToolPermissionRegistry permissionRegistry,
+                            TaskBudgetPersistencePort budgetPersistence) {
+        this(peroAgent, handover, streamBus, permissionRegistry, budgetPersistence, null);
     }
 
     @org.springframework.beans.factory.annotation.Autowired
     public AgentTaskHandler(PeroAgent peroAgent, Handover handover, TaskStreamBus streamBus,
                             ToolPermissionRegistry permissionRegistry,
-                            TaskBudgetPersistencePort budgetPersistence) {
+                            TaskBudgetPersistencePort budgetPersistence,
+                            HumanTaskRepositoryPort humanRepo) {
         this.peroAgent = peroAgent;
         this.handover = handover;
         this.streamBus = streamBus;
         this.permissionRegistry = permissionRegistry;
         this.budgetPersistence = budgetPersistence;
+        this.humanRepo = humanRepo;
     }
 
     @Override
@@ -223,7 +236,35 @@ public class AgentTaskHandler implements TaskHandler {
             }
         }
         return new ReActGovernance(ToolCaller.of(userId, role, scopes), agentName, sessionId,
-                budgetTrackerOf(ctx), java.util.Map.of());
+                budgetTrackerOf(ctx), approvalDecisionsOf(ctx));
+    }
+
+    /**
+     * F3：从 RESOLVED TOOL_APPROVAL 人工任务读回批准/驳回决策（toolName → approve）。
+     * 决策归属键取人工任务 formSchema.toolName（抛出时写入），值取 formValue.approve；
+     * 同一工具多单时后处置的覆盖先前的。
+     */
+    private Map<String, Boolean> approvalDecisionsOf(TaskExecutionContext ctx) {
+        if (humanRepo == null) {
+            return Map.of();
+        }
+        Map<String, Boolean> decisions = new HashMap<>();
+        try {
+            for (var ht : humanRepo.findByTaskId(ctx.taskId())) {
+                if (ht.kind() != com.wikiagent.domain.task.HumanTaskKind.TOOL_APPROVAL
+                        || ht.status() != com.wikiagent.domain.task.HumanTaskStatus.RESOLVED
+                        || ht.formSchema() == null || !ht.formSchema().hasNonNull("toolName")
+                        || ht.formValue() == null) {
+                    continue;
+                }
+                decisions.put(ht.formSchema().get("toolName").asText(),
+                        ht.formValue().path("approve").asBoolean(false));
+            }
+        } catch (Exception e) {
+            // 决策读取失败不阻断执行：审批门按未决处理（保守抛人工）
+            log.warn("任务 {} TOOL_APPROVAL 决策读取失败: {}", ctx.taskId(), e.getMessage());
+        }
+        return decisions;
     }
 
     /**
