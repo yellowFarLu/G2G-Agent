@@ -81,7 +81,9 @@
 - [x] E3 Redis 缓存（embedding 精确缓存 + 答案缓存策略，开关/TTL/bypass）
 - [x] E4 model_call_log 全链路打点（INTENT/EXTRACT/CHAT/RERANK/JUDGE，含 token/成本/耗时/fallbackFrom）+ 单价配置
 - [x] E5 检索权限：domain/subDomain/identity 表达式下推 Milvus；引用契约 §2.5（pageNo/snippet/versionNo）
-- [ ] E6 知识更新/删除：版本化重建索引、软删传播到检索；冲突决议与版本联动
+- [x] E6 知识更新/删除：版本化重建索引、软删传播到检索；冲突决议与版本联动
+  - 证据（缺陷#4）：关系库权威软删——child.active + metadata.isActive 双门控，Milvus 行不物理删除；
+    Milvus 命中与本地关键词两条检索路径均在 filter 为空时也强制剔除软删行，冲突 DELETE_A/B 零命中（RetrievalSoftDeleteTest）
 - TR：越权 domain 隔离 IT；provider 降级桩测试；缓存命中/失效测试；引用完整性测试；打点计数测试
 
 ### F（AC-F1..F4）

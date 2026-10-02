@@ -49,9 +49,12 @@ public class MilvusStoreService {
     private volatile String lastError = "尚未连接";
 
     /**
-     * 修复4：检索只取 is_active=true 行。旧版手工创建、未含 is_active 列的存量集合
-     * 需重建集合或手动 ALTER ADD COLUMN；升级过渡期可置 false 关闭服务端过滤
-     * （关系库侧 is_active 过滤仍然生效）。
+     * 修复4/E6：服务端表达式优先只取 is_active=true 向量行，避免扫描已下线向量。
+     * 注意：这只是性能侧的第一道筛——Milvus 行不做物理删除，冲突下线/重解析只翻关系库
+     * 软删标志，权威门控在 RetrievalService：无论本开关取值，检索结果都以关系库
+     * kb_child_chunk.active 与 knowledge_metadata.is_active 双门控为准。
+     * 旧版手工创建、未含 is_active 列的存量集合需重建集合或手动 ALTER ADD COLUMN；
+     * 升级过渡期可置 false 关闭服务端过滤（不影响关系库双门控）。
      */
     @Value("${wikiagent.milvus.filter-active:true}")
     private boolean filterActive;

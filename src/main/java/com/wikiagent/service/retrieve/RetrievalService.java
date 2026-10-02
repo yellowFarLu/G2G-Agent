@@ -299,26 +299,57 @@ public class RetrievalService {
         return acc;
     }
 
-    /** E5：按 knowledge_metadata 行过滤 Milvus 命中（childId → 元数据）。不过滤/无 DAO 时原样返回。 */
+    /**
+     * E5/E6：Milvus 命中的关系库权威过滤，<b>无论是否带 ACL 表达式始终执行</b>。
+     * 关系库为权威源（Milvus 行不物理删除，冲突下线只翻关系库软删标志），双门控：
+     * <ol>
+     *   <li>子块门：{@code kb_child_chunk} 行不存在或 {@code active=false} → 剔除；</li>
+     *   <li>元数据门：{@code knowledge_metadata} 行存在且 {@code isActive=false}
+     *       （冲突 DELETE_A/DELETE_B 下线）→ 剔除；行不存在默认放行；</li>
+     *   <li>ACL 门：权限表达式在上述基础上 AND 叠加。</li>
+     * </ol>
+     * 仅 DAO 查询异常时保守放行 + WARN；is_active 判定本身是内存布尔判断，不走异常分支。
+     */
     private List<MilvusStoreService.Hit> filterHitsByMetadata(List<MilvusStoreService.Hit> hits,
                                                               RetrievalFilter filter) {
-        if (filter.isEmpty() || metadataDao == null || hits == null || hits.isEmpty()) {
+        if (hits == null || hits.isEmpty() || (childRepo == null && metadataDao == null)) {
             return hits;
         }
+        List<String> childIds = hits.stream().map(MilvusStoreService.Hit::childId).toList();
+        Map<String, KbChildChunk> childRows = null;
+        Map<String, KnowledgeMetadataEntity> meta = null;
         try {
-            Map<String, KnowledgeMetadataEntity> meta = loadMetadata(
-                    hits.stream().map(MilvusStoreService.Hit::childId).toList());
-            List<MilvusStoreService.Hit> out = new ArrayList<>(hits.size());
-            for (MilvusStoreService.Hit h : hits) {
-                if (allowed(meta.get(h.childId()), filter)) {
-                    out.add(h);
+            if (childRepo != null) {
+                childRows = new HashMap<>();
+                for (KbChildChunk c : childRepo.findByIdIn(childIds)) {
+                    childRows.put(c.getId(), c);
                 }
             }
-            return out;
+            if (metadataDao != null) {
+                meta = loadMetadata(childIds);
+            }
         } catch (Exception e) {
-            log.warn("检索权限过滤失败（保守放行原结果）: {}", e.getMessage());
+            log.warn("检索软删/权限过滤的关系库查询失败（保守放行原结果）: {}", e.getMessage());
             return hits;
         }
+        List<MilvusStoreService.Hit> out = new ArrayList<>(hits.size());
+        for (MilvusStoreService.Hit h : hits) {
+            if (childRows != null) {
+                KbChildChunk c = childRows.get(h.childId());
+                if (c == null || !c.isActive()) {
+                    continue; // 子块行不存在（关系库为权威）或子块已软删
+                }
+            }
+            KnowledgeMetadataEntity m = meta == null ? null : meta.get(h.childId());
+            if (m != null && Boolean.FALSE.equals(m.getIsActive())) {
+                continue; // 冲突下线：元数据软删
+            }
+            if (!allowed(m, filter)) {
+                continue; // ACL 表达式门（AND 叠加）
+            }
+            out.add(h);
+        }
+        return out;
     }
 
     private Map<String, KnowledgeMetadataEntity> loadMetadata(List<String> chunkIds) {
@@ -369,14 +400,22 @@ public class RetrievalService {
                 chunkTerms.merge(c, 1, Integer::sum);
             }
         }
-        // E5：权限过滤（按子块元数据）
-        if (!filter.isEmpty() && metadataDao != null && !chunkTerms.isEmpty()) {
+        // E5/E6：关系库权威过滤，filter 为空也执行（与 Milvus 路径双门控对齐）：
+        // knowledge_metadata 行存在且 isActive=false（冲突下线）→ 剔除；再 AND 叠加 ACL 表达式。
+        // 子块 active 已由 findByContentContainingIgnoreCaseAndActiveTrue 查询限定。
+        if (metadataDao != null && !chunkTerms.isEmpty()) {
             try {
                 Map<String, KnowledgeMetadataEntity> meta = loadMetadata(
                         chunkTerms.keySet().stream().map(KbChildChunk::getId).toList());
-                chunkTerms.keySet().removeIf(c -> !allowed(meta.get(c.getId()), filter));
+                chunkTerms.keySet().removeIf(c -> {
+                    KnowledgeMetadataEntity m = meta.get(c.getId());
+                    if (m != null && Boolean.FALSE.equals(m.getIsActive())) {
+                        return true;
+                    }
+                    return !allowed(m, filter);
+                });
             } catch (Exception e) {
-                log.warn("本地检索权限过滤失败（保守放行）: {}", e.getMessage());
+                log.warn("本地检索软删/权限过滤失败（保守放行）: {}", e.getMessage());
             }
         }
         chunkTerms.entrySet().stream()

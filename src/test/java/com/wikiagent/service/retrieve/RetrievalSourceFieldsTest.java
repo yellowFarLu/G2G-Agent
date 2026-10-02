@@ -141,7 +141,28 @@ class RetrievalSourceFieldsTest {
     }
 
     @Test
-    void snippet超过200字符截断且代表子块缺失时回退默认值() {
+    void 代表子块行缺失时assemble回退默认值() {
+        // search 双门控会剔除子块行缺失的命中；直接构造累积器验证 assemble 的防御性回退
+        KbChildChunkRepo childRepo = mock(KbChildChunkRepo.class);
+        when(childRepo.findByIdIn(any())).thenReturn(List.of());
+        KbParentChunkRepo parentRepo = mock(KbParentChunkRepo.class);
+        when(parentRepo.findAllById(any())).thenReturn(List.of(parent()));
+        KbDocumentRepo docRepo = mock(KbDocumentRepo.class);
+        when(docRepo.findAllById(any())).thenReturn(List.of(doc()));
+
+        RetrievalService svc = service(mock(MilvusStoreService.class), childRepo, parentRepo, docRepo);
+        RetrievalService.Accumulator acc = svc.newAccumulator();
+        acc.put("p1", "d1", "c1", 0, 0.8);
+        RetrievalService.Source s = svc.assemble(acc, "查询").sources().get(0);
+        assertEquals(0, s.versionNo());
+        assertNull(s.pageNo());
+        assertNull(s.snippet());
+        assertNull(s.artifactId());
+    }
+
+    @Test
+    void snippet去空白后超200字符截断() {
+        String longContent = "  " + "x".repeat(260) + "  ";
         MilvusStoreService.Hit h = new MilvusStoreService.Hit("c1", 0.8, "d1", "p1", 0, 1, 0);
         MilvusStoreService milvus = mock(MilvusStoreService.class);
         when(milvus.hybridSearch(any(), any(), org.mockito.ArgumentMatchers.anyInt(),
@@ -149,7 +170,7 @@ class RetrievalSourceFieldsTest {
                 .thenReturn(List.of(h));
 
         KbChildChunkRepo childRepo = mock(KbChildChunkRepo.class);
-        when(childRepo.findByIdIn(any())).thenReturn(List.of()); // 子块行已不存在
+        when(childRepo.findByIdIn(any())).thenReturn(List.of(child("c1", 0, 1, 1, longContent)));
         KbParentChunkRepo parentRepo = mock(KbParentChunkRepo.class);
         when(parentRepo.findAllById(any())).thenReturn(List.of(parent()));
         KbDocumentRepo docRepo = mock(KbDocumentRepo.class);
@@ -158,10 +179,7 @@ class RetrievalSourceFieldsTest {
         RetrievalService svc = service(milvus, childRepo, parentRepo, docRepo);
         RetrievalService.Source s = svc.assemble(
                 svc.search(svc.newAccumulator(), List.of("查询")), "查询").sources().get(0);
-        assertEquals(0, s.versionNo());
-        assertNull(s.pageNo());
-        assertNull(s.snippet());
-        assertNull(s.artifactId());
+        assertEquals(200, s.snippet().length());
     }
 
     @Test
