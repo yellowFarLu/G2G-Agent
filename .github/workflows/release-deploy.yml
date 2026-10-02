@@ -1,0 +1,124 @@
+name: Release and Deploy
+
+# 子项目 J（运维）：tag 发布 + 预发自动部署 + 生产手动闸门。
+# 触发：推送 v* 标签（如 v1.4.0）或 Actions 手动 dispatch。
+# 说明：
+#   1. 每个 PR/commit 的完整验收（单测 + Testcontainers IT）仍由 ci.yml 的 mvn verify 负责，
+#      本工作流只做发布件构建与部署编排，因此构建步骤跳过重复测试；
+#   2. 仓库当前【尚无 Dockerfile】（docker-compose.yml 使用 build: . 等待补齐）。
+#      镜像构建步骤以 Dockerfile 存在为前提自动生效（if: hashFiles('Dockerfile') != ''），
+#      Dockerfile 落地前可先手工执行：
+#        docker build -t wiki-agent:<tag> .
+#   3. 部署动作通过 secrets 中配置的网关 Webhook/SSH 触发，密钥不在本文件出现。
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: '要发布的版本（与 tag 同名，如 v1.4.0）；仅手动运行时需要'
+        required: true
+        type: string
+        default: ''
+
+env:
+  IMAGE_NAME: registry.example.com/wiki-agent
+  JAVA_DISTRO: temurin
+  JAVA_VERSION: '21'
+
+jobs:
+  build:
+    name: 构建发布件
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.meta.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: ${{ env.JAVA_DISTRO }}
+          java-version: ${{ env.JAVA_VERSION }}
+          cache: maven
+
+      - name: 解析版本号
+        id: meta
+        run: |
+          if [ "${GITHUB_EVENT_NAME}" = "workflow_dispatch" ]; then
+            VER="${{ inputs.version }}"
+          else
+            VER="${GITHUB_REF_NAME}"
+          fi
+          echo "version=${VER}" >> "$GITHUB_OUTPUT"
+          echo "发布版本: ${VER}"
+
+      # 完整测试已在该 commit 的 CI 流水线（ci.yml: mvn -B verify）中执行
+      - name: Maven 打包（跳过重复测试）
+        run: mvn -B package -DskipTests
+
+      - name: 归档 Jar
+        uses: actions/upload-artifact@v4
+        with:
+          name: wiki-agent-${{ steps.meta.outputs.version }}
+          path: target/*.jar
+          if-no-files-found: error
+
+      # 前提：仓库根目录存在 Dockerfile（当前待补，docker-compose.yml 已引用 build: .）。
+      # Dockerfile 落地前本步骤自动跳过；手工构建命令：
+      #   docker build -t wiki-agent:${{ steps.meta.outputs.version }} .
+      - name: 构建并推送镜像（需 Dockerfile 就位）
+        if: hashFiles('Dockerfile') != ''
+        run: |
+          echo "${{ secrets.REGISTRY_PASSWORD }}" | docker login registry.example.com \
+            -u "${{ secrets.REGISTRY_USERNAME }}" --password-stdin
+          docker build -t "${IMAGE_NAME}:${{ steps.meta.outputs.version }}" \
+                       -t "${IMAGE_NAME}:latest" .
+          docker push "${IMAGE_NAME}:${{ steps.meta.outputs.version }}"
+          docker push "${IMAGE_NAME}:latest"
+
+  deploy-staging:
+    name: 部署预发（自动）
+    needs: build
+    runs-on: ubuntu-latest
+    # 预发环境：tag 推送后自动部署，用于回归与安全演练（信任边界/PII 最小化在 staging 默认开启）
+    environment:
+      name: staging
+      url: https://staging-wikiagent.example.com
+    steps:
+      - name: 触发预发部署 Webhook
+        env:
+          DEPLOY_WEBHOOK: ${{ secrets.STAGING_DEPLOY_WEBHOOK }}
+        run: |
+          test -n "${DEPLOY_WEBHOOK}" || { echo "未配置 STAGING_DEPLOY_WEBHOOK，跳过（需在仓库 secrets 补全）"; exit 0; }
+          curl -fsS -X POST "${DEPLOY_WEBHOOK}" \
+            -H "Content-Type: application/json" \
+            -d "{\"app\":\"wiki-agent\",\"env\":\"staging\",\"version\":\"${{ needs.build.outputs.version }}\"}"
+      - name: 预发冒烟（健康检查）
+        run: |
+          sleep 20
+          curl -fsS --retry 5 --retry-delay 5 https://staging-wikiagent.example.com/actuator/health
+
+  deploy-prod:
+    name: 部署生产（人工审批闸门）
+    needs: [build, deploy-staging]
+    runs-on: ubuntu-latest
+    # GitHub Environments 保护规则：production 必须配置 Required reviewers，
+    # 未经指定审批人同意不会执行本 job（AC-J4 部署闸门）。
+    environment:
+      name: production
+      url: https://wikiagent.example.com
+    steps:
+      - name: 触发生产部署 Webhook
+        env:
+          DEPLOY_WEBHOOK: ${{ secrets.PROD_DEPLOY_WEBHOOK }}
+        run: |
+          test -n "${DEPLOY_WEBHOOK}" || { echo "未配置 PROD_DEPLOY_WEBHOOK，拒绝无审计部署"; exit 1; }
+          curl -fsS -X POST "${DEPLOY_WEBHOOK}" \
+            -H "Content-Type: application/json" \
+            -d "{\"app\":\"wiki-agent\",\"env\":\"prod\",\"version\":\"${{ needs.build.outputs.version }}\"}"
+      - name: 生产冒烟（健康检查，含 dashScopeKey 指标）
+        run: |
+          sleep 30
+          curl -fsS --retry 6 --retry-delay 10 https://wikiagent.example.com/actuator/health

@@ -6,16 +6,20 @@ import com.wikiagent.application.multiagent.TenantKey;
 import com.wikiagent.config.WikiAgentProperties;
 import com.wikiagent.dto.ChatRequest;
 import com.wikiagent.infrastructure.gateway.GuardrailAdvisorChain;
+import com.wikiagent.infrastructure.security.StreamingOutputGuardrailSender;
 import com.wikiagent.service.agent.AgentRagService;
 import com.wikiagent.service.retrieve.QueryRewriteService;
 import com.wikiagent.service.retrieve.RetrievalService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.slf4j.MDC;
 import org.springframework.ai.chat.messages.SystemMessage;
 import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.ai.chat.prompt.Prompt;
 import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
@@ -58,6 +62,14 @@ public class ChatService {
     private final boolean multiAgentEnabled;
     private final boolean peroEnabled;
 
+    /**
+     * J2：自身的 Spring 代理（@Lazy 打破自注入循环）。{@link #chat} 必须在请求线程同步执行
+     * 以捕获 MDC，再经代理进入 {@code @Async} 边界；单测直连 new 构造时为 null，退化为同线程执行。
+     */
+    @Autowired
+    @Lazy
+    private ChatService self;
+
     public ChatService(WikiAgentProperties props, AgentRagService agentRag, QueryRewriteService rewriter,
                        RetrievalService retrieval, ChatStreamer streamer, MultiAgentOrchestrator multiAgent,
                        ObjectProvider<AgentOrchestrator> v1v2OrchestratorProvider,
@@ -80,8 +92,46 @@ public class ChatService {
         this.peroEnabled = peroEnabled;
     }
 
-    @Async("chatExecutor")
+    /**
+     * 对话入口（<b>请求线程同步执行</b>）：在 @Async 边界之前捕获 MDC 上下文，
+     * 再经自身 Spring 代理提交到 chatExecutor，保证 traceId 跨越异步线程不丢失。
+     */
     public void chat(ChatRequest request, SseEmitter emitter) {
+        Map<String, String> capturedMdc = MDC.getCopyOfContextMap();
+        ChatService proxy = self;
+        if (proxy != null) {
+            proxy.chatAsync(request, emitter, capturedMdc);
+        } else {
+            // 无 Spring 代理（旧装配/单测直连）：同线程执行，MDC 恢复语义保持一致
+            chatAsync(request, emitter, capturedMdc);
+        }
+    }
+
+    /**
+     * 实际对话处理（运行于 chatExecutor）。
+     *
+     * @param capturedMdc 提交请求时在请求线程捕获的 MDC 快照；进入异步线程后原样恢复，
+     *                    结束时（finally）恢复为工作线程原有 MDC，避免线程池线程串号
+     */
+    @Async("chatExecutor")
+    public void chatAsync(ChatRequest request, SseEmitter emitter, Map<String, String> capturedMdc) {
+        Map<String, String> previousMdc = MDC.getCopyOfContextMap();
+        if (capturedMdc != null) {
+            MDC.setContextMap(capturedMdc);
+        }
+        try {
+            doChat(request, emitter);
+        } finally {
+            // 内联恢复：不依赖任何外部 MDC 工具类（I 代理的装饰器独立演进）
+            if (previousMdc != null) {
+                MDC.setContextMap(previousMdc);
+            } else {
+                MDC.clear();
+            }
+        }
+    }
+
+    private void doChat(ChatRequest request, SseEmitter emitter) {
         SseSender sse = new SseSender(emitter);
         String rawQuestion = request.question() == null ? "" : request.question().strip();
         String userId = request.identity() == null ? "anonymous" : request.identity();
@@ -102,8 +152,27 @@ public class ChatService {
             // 持久化用户消息
             historyService.save(sessionId, "user", rawQuestion);
 
-            // 用历史记录装饰器替换 sse，拦截 delta 积累助手文本并在 done 时持久化
-            sse = new HistorySseSender(emitter, historyService, sessionId);
+            // J2 流式输出网关：最外层包装——delta 累积、done 前经输出检测器链校验完整答案；
+            // 通过才发 done 并持久化（SANITIZE 时落脱敏文本），违规则改发 blocked、
+            // 答案不落 assistant 历史而写 blocked 标记（已发 delta 受 SSE 本质限制不撤回）。
+            // 阻断审计复用 GuardrailAdvisorChain.checkOutput 内既有 GatewayAuditService。
+            sse = new StreamingOutputGuardrailSender(new SseSender(emitter),
+                    guardrailChain, userId, sessionId,
+                    new StreamingOutputGuardrailSender.AnswerFinalizer() {
+                        @Override
+                        public void onAnswer(String sid, String finalAnswer) {
+                            if (finalAnswer != null && !finalAnswer.isBlank()) {
+                                historyService.save(sid, "assistant", finalAnswer);
+                            }
+                        }
+
+                        @Override
+                        public void onBlocked(String sid, String violationType, String reason) {
+                            historyService.save(sid, "blocked",
+                                    "[输出被安全网关拦截] type=" + violationType
+                                            + " reason=" + truncateMarker(reason, 500));
+                        }
+                    });
 
             // === v5 §19 输入安全网关（注入检测 / PII 脱敏 / 合规）===
             GuardrailAdvisorChain.ChainResult inputResult =
@@ -176,5 +245,14 @@ public class ChatService {
     private static String messageOf(Throwable e) {
         String m = e.getMessage();
         return m == null || m.isBlank() ? e.getClass().getSimpleName() : m;
+    }
+
+    /** 截断 blocked 标记中的原因文本，避免撑爆历史列。 */
+    private static String truncateMarker(String s, int maxLen) {
+        if (s == null) {
+            return "";
+        }
+        String oneLine = s.replace('\n', ' ').replace('\r', ' ');
+        return oneLine.length() <= maxLen ? oneLine : oneLine.substring(0, maxLen);
     }
 }
