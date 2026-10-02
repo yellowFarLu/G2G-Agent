@@ -20,6 +20,8 @@ import com.wikiagent.dto.ConflictException;
 import com.wikiagent.dto.NotFoundException;
 import com.wikiagent.entity.rule.ReviewCaseEntity;
 import com.wikiagent.repo.rule.ReviewCaseRepo;
+import jakarta.persistence.EntityManager;
+import jakarta.persistence.FlushModeType;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -40,19 +42,23 @@ public class ReviewCaseService {
     private final ObjectProvider<TaskEventRepositoryPort> eventRepoProvider;
     private final ObjectProvider<HumanTaskRepositoryPort> humanTaskRepoProvider;
     private final ObjectProvider<HumanTaskService> humanTaskServiceProvider;
+    /** #7 复核闸门行锁（JPA 原生 FOR UPDATE），无 JPA 环境时退化为旧逻辑。 */
+    private final ObjectProvider<EntityManager> entityManagerProvider;
 
     public ReviewCaseService(ReviewCaseRepo repo,
                              ProvenanceService provenance,
                              ObjectMapper mapper,
                              ObjectProvider<TaskEventRepositoryPort> eventRepoProvider,
                              ObjectProvider<HumanTaskRepositoryPort> humanTaskRepoProvider,
-                             ObjectProvider<HumanTaskService> humanTaskServiceProvider) {
+                             ObjectProvider<HumanTaskService> humanTaskServiceProvider,
+                             ObjectProvider<EntityManager> entityManagerProvider) {
         this.repo = repo;
         this.provenance = provenance;
         this.mapper = mapper;
         this.eventRepoProvider = eventRepoProvider;
         this.humanTaskRepoProvider = humanTaskRepoProvider;
         this.humanTaskServiceProvider = humanTaskServiceProvider;
+        this.entityManagerProvider = entityManagerProvider;
     }
 
     @Transactional
@@ -186,38 +192,84 @@ public class ReviewCaseService {
         return saved;
     }
 
-    private void resumeReviewHumanTask(ReviewCaseEntity e, ReviewCase.ReviewAction action,
-                                       Map<String, String> editedFields, String userId) {
+    /**
+     * 恢复关联 REVIEW 人工任务（#7 行锁串行化）。
+     * <p>
+     * 两 reviewer 并发处置同任务最后两个 OPEN 案件时，修复前两边的"仍有 OPEN"判断
+     * 可能都基于旧快照成立，导致无人 resolve、任务永久 WAITING_HUMAN。现在：
+     * <ol>
+     *   <li>先以 SELECT … FOR UPDATE 锁定该任务 OPEN/CLAIMED 的 REVIEW 人工任务行
+     *       （当前读；无行则直接返回）。查询显式 COMMIT 刷新模式——必须先抢 human_task
+     *       锁再 flush 本案件更新，否则两事务先各锁 review_case 再争 human_task 会死锁；</li>
+     *   <li>锁内 flush 本案件处置，再以 FOR UPDATE 当前读计数剩余 OPEN 案件
+     *       （InnoDB REPEATABLE READ 的普通一致性读会沿用事务早期快照，锁等待后仍读到旧值，
+     *       而 FOR UPDATE 恒为当前读；H2 READ_COMMITTED 下行锁等待同样完成串行化）；</li>
+     *   <li>剩余 OPEN=0 才 resolve。行锁使两个 dispose 严格排队，resolve 至多被调用一次；
+     *       HumanTaskService 侧条件更新（status in OPEN/CLAIMED）为第二道防线。</li>
+     * </ol>
+     *
+     * @return 是否存在可恢复的 OPEN/CLAIMED REVIEW 人工任务（#9 事件去重据此判断）
+     */
+    private boolean resumeReviewHumanTask(ReviewCaseEntity e, ReviewCase.ReviewAction action,
+                                          Map<String, String> editedFields, String userId) {
         HumanTaskRepositoryPort humanTaskRepo = humanTaskRepoProvider.getIfAvailable();
         HumanTaskService humanTaskService = humanTaskServiceProvider.getIfAvailable();
-        if (humanTaskRepo == null || humanTaskService == null) {
-            return;
+        EntityManager em = entityManagerProvider.getIfAvailable();
+        if (humanTaskRepo == null || humanTaskService == null || em == null) {
+            return false;
         }
-        List<HumanTask> tasks = humanTaskRepo.findByTaskId(e.getTaskId());
-        // 复核闸门：同一任务仍有 OPEN 案件时，本次处置只留痕不恢复流水线，
-        // 待最后一个案件处置后再 RESUME，避免未复核字段随文档入库。
-        boolean stillOpen = repo.findByTaskIdAndStatus(e.getTaskId(),
-                ReviewCase.ReviewCaseStatus.OPEN.name()).stream()
-                .anyMatch(c -> !c.getId().equals(e.getId()));
-        if (stillOpen) {
-            return;
+        List<Long> lockedHumanTaskIds = lockReviewHumanTaskRows(em, e.getTaskId());
+        if (lockedHumanTaskIds.isEmpty()) {
+            return false;
         }
-        for (HumanTask ht : tasks) {
-            if (ht.kind() == HumanTaskKind.REVIEW
-                    && (ht.status() == HumanTaskStatus.OPEN || ht.status() == HumanTaskStatus.CLAIMED)) {
-                ObjectNode formValue = mapper.createObjectNode()
-                        .put("action", action.name())
-                        .put("caseId", e.getId());
-                if (editedFields != null && !editedFields.isEmpty()) {
-                    formValue.set("editedFields", mapper.valueToTree(editedFields));
-                }
-                humanTaskService.resolve(ht.id(), userId, HumanTaskKind.REVIEW, formValue, null);
-                // 更新案件关联的 human_task_id
-                e.setHumanTaskId(ht.id());
-                repo.save(e);
-                break;
+        // 本案件状态迁移/血缘边先落库，再做当前读计数
+        em.flush();
+        List<?> openCaseIds = em.createNativeQuery("""
+                        SELECT id FROM review_case
+                        WHERE task_id = :taskId AND status = 'OPEN'
+                        FOR UPDATE
+                        """)
+                .setParameter("taskId", e.getTaskId())
+                .setFlushMode(FlushModeType.COMMIT)
+                .getResultList();
+        if (!openCaseIds.isEmpty()) {
+            // 同任务仍有 OPEN 案件：本次只留痕不恢复，等最后一个案件处置后再 resolve
+            return true;
+        }
+        for (Long htId : lockedHumanTaskIds) {
+            HumanTask ht = humanTaskRepo.findById(htId).orElse(null);
+            if (ht == null || ht.kind() != HumanTaskKind.REVIEW
+                    || (ht.status() != HumanTaskStatus.OPEN && ht.status() != HumanTaskStatus.CLAIMED)) {
+                continue;
             }
+            ObjectNode formValue = mapper.createObjectNode()
+                    .put("action", action.name())
+                    .put("caseId", e.getId())
+                    .put("resolvedBy", userId);
+            if (editedFields != null && !editedFields.isEmpty()) {
+                formValue.set("editedFields", mapper.valueToTree(editedFields));
+            }
+            humanTaskService.resolve(htId, userId, HumanTaskKind.REVIEW, formValue, null);
+            // 更新案件关联的 human_task_id
+            e.setHumanTaskId(htId);
+            repo.save(e);
+            break;
         }
+        return true;
+    }
+
+    /** 锁定任务的 OPEN/CLAIMED REVIEW 人工任务行；COMMIT 刷新模式确保先拿锁后 flush。 */
+    @SuppressWarnings("unchecked")
+    private static List<Long> lockReviewHumanTaskRows(EntityManager em, String taskId) {
+        return em.createNativeQuery("""
+                        SELECT id FROM human_task
+                        WHERE task_id = :taskId AND kind = 'REVIEW'
+                          AND status IN ('OPEN', 'CLAIMED')
+                        FOR UPDATE
+                        """)
+                .setParameter("taskId", taskId)
+                .setFlushMode(FlushModeType.COMMIT)
+                .getResultList();
     }
 
     private int resolveDocVersionNo(ReviewCaseEntity e) {
