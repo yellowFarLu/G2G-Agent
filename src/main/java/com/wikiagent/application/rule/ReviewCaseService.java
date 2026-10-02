@@ -139,7 +139,8 @@ public class ReviewCaseService {
 
         // 1) EDIT：字段级编辑落库 + EDITED 边
         if (action == ReviewCase.ReviewAction.EDIT && editedFields != null && !editedFields.isEmpty()) {
-            int docVersionNo = resolveDocVersionNo(e);
+            // #12 锚定案件发生时的文档版本，处置期间文档即使已产生新版本也不改写新历史
+            int docVersionNo = anchoredVersion(e);
             for (Map.Entry<String, String> entry : editedFields.entrySet()) {
                 String fieldKey = entry.getKey();
                 String newValue = entry.getValue();
@@ -179,7 +180,7 @@ public class ReviewCaseService {
 
         // 4) REVIEWED 血缘边（docId 非空才写）
         if (e.getDocId() != null) {
-            int docVersionNo = resolveDocVersionNo(e);
+            int docVersionNo = anchoredVersion(e);
             provenance.addEdge(e.getDocId(), docVersionNo,
                     String.valueOf(e.getId()), "REVIEW_CASE", e.getDocId(), "DOCUMENT",
                     EdgeType.REVIEWED, action.name());
@@ -296,6 +297,15 @@ public class ReviewCaseService {
         }
         var latest = provenance.latestVersion(e.getDocId());
         return latest == null ? 1 : latest.versionNo();
+    }
+
+    /**
+     * #12 处置锚定版本：案件携带 versionNo 时一律锚定案件发生时的版本
+     * （EDIT 落字段、EDITED/REVIEWED 边三处统一），处置期间文档产生新版本
+     * 也不改写新版本历史；仅历史脏数据缺省时回退当前最新版本。
+     */
+    private int anchoredVersion(ReviewCaseEntity e) {
+        return e.getVersionNo() != null ? e.getVersionNo() : resolveDocVersionNo(e);
     }
 
     private String currentFieldValue(String docId, String fieldKey) {

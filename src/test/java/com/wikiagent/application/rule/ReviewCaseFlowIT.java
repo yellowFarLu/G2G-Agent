@@ -2,6 +2,7 @@ package com.wikiagent.application.rule;
 
 import com.wikiagent.application.lineage.ProvenanceService;
 import com.wikiagent.domain.lineage.EdgeType;
+import com.wikiagent.domain.lineage.FieldVersion;
 import com.wikiagent.domain.rule.ReviewCase;
 import com.wikiagent.domain.rule.RuleComputation;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -199,5 +200,35 @@ class ReviewCaseFlowIT {
         JsonNode resolutionNode = mapper.readTree(disposed.resolutionJson());
         assertThat(resolutionNode.get("action").asText())
                 .isEqualTo(ReviewCase.ReviewAction.REJECT.name());
+    }
+
+    /**
+     * #12 EDIT 版本锚定：案件 versionNo=1，处置时文档已产生 v2，人工编辑必须
+     * 写回 v1 的 field_version，EDITED/REVIEWED 边也落在 v1，不得污染 v2 历史。
+     */
+    @Test
+    void editIsAnchoredToCaseVersionNotLatest() {
+        String docId = "doc-anchor-" + System.nanoTime();
+        provenance.createDocVersion(docId, null, "初版", null, "test");
+        ReviewCase c = reviewCaseService.createLowConfidence(docId, 1, "f1",
+                "MODEL", 0.2, "低置信", null);
+
+        // 复核期间文档演进到 v2（最新版本已是 2）
+        provenance.createDocVersion(docId, 1, "复核期间新版本", null, "test");
+        assertThat(provenance.latestVersion(docId).versionNo()).isEqualTo(2);
+
+        reviewCaseService.dispose(c.id(), ReviewCase.ReviewAction.EDIT,
+                Map.of("f1", "人工锚定值"), "reviewer-1");
+
+        List<FieldVersion> history = provenance.fieldHistory(docId, "f1");
+        assertThat(history).as("字段历史只应新增锚定 v1 的一行").hasSize(1);
+        assertThat(history.get(0).versionNo()).isEqualTo(1);
+        assertThat(history.get(0).valueText()).isEqualTo("人工锚定值");
+        assertThat(history.get(0).editedBy()).isEqualTo("human");
+
+        var edges = provenance.edgesForDoc(docId);
+        assertThat(edges).anyMatch(e -> e.edgeType() == EdgeType.EDITED && e.versionNo() == 1);
+        assertThat(edges).anyMatch(e -> e.edgeType() == EdgeType.REVIEWED && e.versionNo() == 1);
+        assertThat(edges).as("处置血缘不得写到处置期间产生的 v2").noneMatch(e -> e.versionNo() == 2);
     }
 }
