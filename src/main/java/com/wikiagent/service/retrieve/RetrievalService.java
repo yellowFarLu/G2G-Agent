@@ -181,7 +181,7 @@ public class RetrievalService {
         for (String term : terms) {
             List<KbChildChunk> rows;
             try {
-                rows = childRepo.findByContentContainingIgnoreCase(
+                rows = childRepo.findByContentContainingIgnoreCaseAndActiveTrue(
                         term, PageRequest.of(0, perTermLimit));
             } catch (Exception e) {
                 log.warn("本地关键词检索失败 term={}: {}", term, e.getMessage());

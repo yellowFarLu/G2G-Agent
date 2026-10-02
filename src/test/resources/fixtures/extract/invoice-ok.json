@@ -1,0 +1,14 @@
+{
+  "fields": [
+    {"key": "invoiceNo", "value": "12345678", "confidence": 0.98,
+      "evidence": [{"pageNo": 1, "snippet": "发票号码：12345678"}]},
+    {"key": "invoiceDate", "value": "2026-03-15", "confidence": 0.95,
+      "evidence": [{"pageNo": 1, "snippet": "开票日期：2026年03月15日"}]},
+    {"key": "amount", "value": "1280.50", "confidence": 0.91,
+      "evidence": [{"pageNo": 2, "snippet": "价税合计（小写）￥1280.50"}]},
+    {"key": "seller", "value": "北京云智科技有限公司", "confidence": 0.9,
+      "evidence": [{"pageNo": 1, "snippet": "销售方名称：北京云智科技有限公司"}]},
+    {"key": "currency", "value": "CNY", "confidence": 0.99,
+      "evidence": [{"pageNo": 2, "snippet": "￥"}]}
+  ]
+}

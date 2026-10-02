@@ -494,12 +494,16 @@ public class TaskWorker implements TaskMessageSink {
                         .put("resultRef", String.valueOf(resultRef))));
     }
 
-    /** 已决人工接管点的表单值并入上下文（RESOLVED INPUT → 字段平铺）。 */
+    /**
+     * 已决人工接管点的表单值并入上下文（RESOLVED INPUT/DECRYPT → 字段平铺）。
+     * DECRYPT 与 INPUT 同为"填表续跑"语义（口令字段 decryptPassword）；
+     * REVIEW/TOOL_APPROVAL 是审批语义，不靠表单值恢复，不并入。
+     */
     private Map<String, JsonNode> humanInputs(String taskId) {
         Map<String, JsonNode> inputs = new HashMap<>();
         for (HumanTask ht : humanRepo.findByTaskId(taskId)) {
-            if (ht.status() == HumanTaskStatus.RESOLVED && ht.kind() == HumanTaskKind.INPUT
-                    && ht.formValue() != null) {
+            if (ht.status() == HumanTaskStatus.RESOLVED && ht.formValue() != null
+                    && (ht.kind() == HumanTaskKind.INPUT || ht.kind() == HumanTaskKind.DECRYPT)) {
                 ht.formValue().fields().forEachRemaining(e -> inputs.put(e.getKey(), e.getValue()));
             }
         }

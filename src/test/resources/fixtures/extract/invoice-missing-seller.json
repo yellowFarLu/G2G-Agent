@@ -1,0 +1,9 @@
+{
+  "fields": [
+    {"key": "invoiceNo", "value": "12345678", "confidence": 0.9,
+      "evidence": [{"pageNo": 1, "snippet": "发票号码：12345678"}]},
+    {"key": "invoiceDate", "value": "2026-03-15", "confidence": 0.9, "evidence": []},
+    {"key": "amount", "value": "1280.50", "confidence": 0.9, "evidence": []},
+    {"key": "currency", "value": "CNY", "confidence": 0.99, "evidence": []}
+  ]
+}

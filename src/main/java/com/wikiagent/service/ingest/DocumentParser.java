@@ -15,14 +15,21 @@ import org.apache.poi.xwpf.usermodel.XWPFParagraph;
 import org.apache.poi.xwpf.usermodel.XWPFTable;
 import org.apache.poi.xwpf.usermodel.XWPFTableCell;
 import org.apache.poi.xwpf.usermodel.XWPFTableRow;
+import com.wikiagent.infrastructure.parse.TikaTextExtractor;
 import org.springframework.stereotype.Component;
 
 /**
- * 按扩展名解析文档为纯文本。支持：txt/md、pdf、docx、xlsx。
- * 旧版二进制 .doc/.xls 明确报错（不解析）。
+ * 按扩展名解析文档为纯文本。支持：txt/md、pdf、docx、xlsx；
+ * 旧版二进制 .doc/.xls 经 Tika 纯 Java 兜底（子项目 B）。
  */
 @Component
 public class DocumentParser {
+
+    private final TikaTextExtractor tika;
+
+    public DocumentParser(TikaTextExtractor tika) {
+        this.tika = tika;
+    }
 
     public String parse(String filename, byte[] bytes) {
         String name = filename.toLowerCase();
@@ -32,8 +39,8 @@ public class DocumentParser {
             case "pdf" -> parsePdf(bytes);
             case "docx" -> parseDocx(bytes);
             case "xlsx" -> parseXlsx(bytes);
-            case "doc", "xls" -> throw new IllegalArgumentException(
-                    "暂不支持旧版二进制格式 ." + ext + "，请先另存为 ." + ext + "x / pdf / txt");
+            // 子项目 B：旧版二进制格式 Tika 兜底；损坏/加密抛 IllegalStateException → PARSE_FAILED
+            case "doc", "xls" -> tika.extract(bytes, filename);
             default -> throw new IllegalArgumentException("不支持的文档类型: ." + ext);
         };
     }

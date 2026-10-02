@@ -249,3 +249,28 @@ wikiagent:
     child-chars: 350
     child-overlap: 60
     embedding-batch: 10
+  # 子项目 B：文档智能解析（OCR/ASR/版面/表格）。provider=none 或缺 API Key 时流水线自动跳过 AI 能力
+  parse:
+    provider: ${WIKIAGENT_PARSE_PROVIDER:dashscope}
+    max-file-mb: 200
+    scanned-page-char-threshold: 20
+    # 文本层/OCR 双跑相似度低于该值（差异率超阈）→ CONFLICT 标记，不静默选一个
+    text-conflict-similarity: 0.85
+    ocr-timeout-sec: 30
+    asr-timeout-sec: 120
+    layout-timeout-sec: 30
+    table-timeout-sec: 60
+    max-attempts: 3
+    retry-backoff-base-ms: 500
+    circuit-open-sec: 60
+    circuit-failure-threshold: 3
+    vision-model: qwen-vl-max
+    asr-model: paraformer-v2
+    # ASR 要求文件公网可访问；部署 OSS 后配置前缀（如 https://bucket.oss.../audio），留空则 ASR 能力不可用
+    asr-file-base-url: ${WIKIAGENT_PARSE_ASR_BASE_URL:}
+    dashscope-base-url: https://dashscope.aliyuncs.com/api/v1
+  extract:
+    # 字段置信度低于该值自动转人工 REVIEW（规格 §2.1 默认 0.75）
+    low-confidence-threshold: 0.75
+    # 结构化输出校验失败后的修复重试次数
+    repair-attempts: 1

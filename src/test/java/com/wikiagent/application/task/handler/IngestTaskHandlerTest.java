@@ -184,10 +184,15 @@ class IngestTaskHandlerTest {
                 .get().extracting(KbDocument::getStatus).isEqualTo(KbDocument.READY);
     }
 
-    // ③ 不支持 .doc：PARSE 步骤致命失败 VALIDATION_FAILED（不重试）
+    // ③ 子项目 B：旧版真实 .doc（OLE2 固定样本）经 Tika 兜底，PARSE 成功不再致命
     @Test
-    void legacyDocFailsFatalValidation() throws Exception {
-        String docId = newDoc("legacy.doc", "legacy binary placeholder".getBytes(StandardCharsets.UTF_8));
+    void legacyDocParsedByTika() throws Exception {
+        byte[] legacyBytes;
+        try (var in = getClass().getResourceAsStream("/fixtures/parse/legacy.doc")) {
+            assertThat(in).isNotNull();
+            legacyBytes = in.readAllBytes();
+        }
+        String docId = newDoc("legacy.doc", legacyBytes);
         docRepo.save(newDocRow(docId, "legacy.doc"));
 
         String taskId = "tsk_doc_" + uid();
@@ -195,11 +200,12 @@ class IngestTaskHandlerTest {
         ctx.setCurrentStepNo(1);
         handler().executeStep(ctx); // DOWNLOAD 成功
         ctx.setCurrentStepNo(2);
+        StepResult parseResult = handler().executeStep(ctx); // PARSE 走 Tika
 
-        assertThatThrownBy(() -> handler().executeStep(ctx))
-                .isInstanceOf(FatalTaskException.class)
-                .extracting(e -> ((FatalTaskException) e).getErrorCode())
-                .isEqualTo(com.wikiagent.domain.task.ErrorCode.VALIDATION_FAILED);
+        assertThat(parseResult.skip()).isFalse();
+        String raw = Files.readString(
+                Path.of("data", "uploads", docId, "_parsed.txt"), StandardCharsets.UTF_8);
+        assertThat(raw).contains("旧版 Word 文档测试内容");
     }
 
     // ④ 断点重跑：预置前 3 步 DONE，从 SPLIT 续跑 → 子块行数不翻倍、不重复写 Milvus

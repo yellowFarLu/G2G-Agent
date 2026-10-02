@@ -1,6 +1,9 @@
 package com.wikiagent.application.knowledge;
 
+import com.wikiagent.domain.lineage.ArtifactType;
+import com.wikiagent.domain.lineage.DocArtifact;
 import com.wikiagent.entity.KbChildChunk;
+import com.wikiagent.infrastructure.lineage.ArtifactStore;
 import com.wikiagent.infrastructure.persistence.KnowledgeMetadataEntity;
 import com.wikiagent.infrastructure.persistence.KnowledgeMetadataJpaDao;
 import org.slf4j.Logger;
@@ -27,9 +30,11 @@ public class KnowledgeTaggingService {
     private static final Logger log = LoggerFactory.getLogger(KnowledgeTaggingService.class);
 
     private final KnowledgeMetadataJpaDao metadataDao;
+    private final ArtifactStore artifactStore;
 
-    public KnowledgeTaggingService(KnowledgeMetadataJpaDao metadataDao) {
+    public KnowledgeTaggingService(KnowledgeMetadataJpaDao metadataDao, ArtifactStore artifactStore) {
         this.metadataDao = metadataDao;
+        this.artifactStore = artifactStore;
     }
 
     /**
@@ -60,8 +65,15 @@ public class KnowledgeTaggingService {
             e.setCreatedBy(ctx.createdBy());
             e.setCreatedIdentity(ctx.createdIdentity());
             e.setSourceFilename(ctx.sourceFilename());
-            e.setVersion(1);
-            e.setIsActive(true);
+            e.setVersion(chunk.getVersionNo());
+            e.setIsActive(chunk.isActive());
+            e.setPageNo(chunk.getPageNo());
+            String snippet = chunk.getContent();
+            if (snippet != null && snippet.length() > 200) {
+                snippet = snippet.substring(0, 200);
+            }
+            e.setSnippet(snippet);
+            e.setArtifactId(resolveArtifactId(docId, chunk));
             rows.add(e);
         }
         if (!rows.isEmpty()) {
@@ -70,5 +82,23 @@ public class KnowledgeTaggingService {
         log.info("知识打标完成 docId={} domain={}/{} written={} skipped={}",
                 docId, ctx.domainTag(), ctx.subDomainTag(), rows.size(), skipped);
         return rows.size();
+    }
+
+    /** chunk→产物：有页码先指 OCR_PAGE，回退到该版本 CLEANED_TEXT；血缘未启用时为 null。 */
+    private Long resolveArtifactId(String docId, KbChildChunk chunk) {
+        try {
+            if (chunk.getPageNo() != null) {
+                DocArtifact ocr = artifactStore.find(docId, chunk.getVersionNo(),
+                        ArtifactType.OCR_PAGE, chunk.getPageNo());
+                if (ocr != null) {
+                    return ocr.id();
+                }
+            }
+            DocArtifact cleaned = artifactStore.find(docId, chunk.getVersionNo(),
+                    ArtifactType.CLEANED_TEXT, null);
+            return cleaned == null ? null : cleaned.id();
+        } catch (Exception e) {
+            return null;
+        }
     }
 }
