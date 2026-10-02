@@ -29,6 +29,7 @@ import org.springframework.transaction.annotation.Transactional;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 
 /**
  * 复核案件服务：低置信/材料差异案件的创建与处置（通过/驳回/编辑）。
@@ -82,6 +83,17 @@ public class ReviewCaseService {
     @Transactional
     public ReviewCase createMaterialDiff(String docId, String ruleCode, Integer ruleVersion,
                                          Long computationId, String diffJson) {
+        // #8 重算幂等：同 (docId, ruleCode, MATERIAL_DIFF, OPEN) 已存在则直接复用，
+        // 不重复建案。OPEN 期间案件正由人工处理，字段级差异内容变化也不冲案；
+        // 处置（非 OPEN）后再次重算才会进入新一轮计算而建新案。
+        Optional<ReviewCaseEntity> openExisting =
+                repo.findFirstByDocIdAndRuleCodeAndCaseTypeAndStatusOrderByIdDesc(
+                        docId, ruleCode,
+                        ReviewCase.ReviewCaseType.MATERIAL_DIFF.name(),
+                        ReviewCase.ReviewCaseStatus.OPEN.name());
+        if (openExisting.isPresent()) {
+            return toDomain(openExisting.get());
+        }
         ReviewCaseEntity e = new ReviewCaseEntity();
         e.setCaseType(ReviewCase.ReviewCaseType.MATERIAL_DIFF.name());
         e.setDocId(docId);

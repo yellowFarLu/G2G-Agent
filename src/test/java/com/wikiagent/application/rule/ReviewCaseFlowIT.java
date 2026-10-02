@@ -118,4 +118,50 @@ class ReviewCaseFlowIT {
         assertThat(edges).anyMatch(e -> e.edgeType() == EdgeType.REVIEWED
                 && e.note().contains("REJECT"));
     }
+
+    /**
+     * #8 材料差异重算幂等：同输入连续执行两次（mismatch 不变）只建一条 OPEN 案件；
+     * 人工处置后再次执行（新一轮计算）产生新的 OPEN 案件。
+     */
+    @Test
+    void materialDiffIsIdempotentWhileOpenAndReopensAfterDispose() {
+        String code = "matdiff-idem-" + System.nanoTime();
+        String docId = "doc-md-idem-" + System.nanoTime();
+        String dsl = """
+                {"steps":[
+                  {"op":"materialDiff","params":{"left":"matA","right":"matB"},"to":"diff"}
+                ],"outputs":["diff"]}
+                """;
+        ruleSetService.createDraft(code, dsl, "材料比对幂等", "test");
+        ruleSetService.publish(code, 1);
+
+        Map<String, Object> input = Map.of(
+                "matA", Map.of("amount", "100", "tax", "13"),
+                "matB", Map.of("amount", "120", "tax", "13"));
+
+        executionService.execute(code, docId, input);
+        executionService.execute(code, docId, input);
+
+        List<ReviewCase> afterTwice = reviewCaseService.list(null, docId);
+        List<ReviewCase> openMaterial = afterTwice.stream()
+                .filter(c -> c.caseType() == ReviewCase.ReviewCaseType.MATERIAL_DIFF
+                        && c.status() == ReviewCase.ReviewCaseStatus.OPEN)
+                .toList();
+        assertThat(openMaterial).as("同输入重算不得重复建 MATERIAL_DIFF OPEN 案件").hasSize(1);
+
+        // 人工处置（APPROVE）后案件关闭
+        reviewCaseService.dispose(openMaterial.get(0).id(),
+                ReviewCase.ReviewAction.APPROVE, null, "reviewer-1");
+
+        // 新一轮计算 mismatch 仍在 → 产生新 OPEN 案件
+        executionService.execute(code, docId, input);
+        List<ReviewCase> reopened = reviewCaseService.list(null, docId).stream()
+                .filter(c -> c.caseType() == ReviewCase.ReviewCaseType.MATERIAL_DIFF)
+                .toList();
+        assertThat(reopened).hasSize(2);
+        assertThat(reopened.stream().filter(c -> c.status() == ReviewCase.ReviewCaseStatus.OPEN))
+                .hasSize(1);
+        assertThat(reopened.stream().filter(c -> c.status() == ReviewCase.ReviewCaseStatus.APPROVED))
+                .hasSize(1);
+    }
 }
