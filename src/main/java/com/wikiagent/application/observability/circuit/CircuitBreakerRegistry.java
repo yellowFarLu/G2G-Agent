@@ -21,7 +21,7 @@ import java.util.concurrent.ConcurrentHashMap;
  * Prometheus 侧 {@code wikiagent_circuit_state}（AC-I2）从本注册表取数；
  * 无 supplier 的组件默认 CLOSED（注册表固定覆盖 {@link CircuitComponents#ALL}）。
  */
-@Component
+@Component("wikiagentCircuitBreakerRegistry")
 @ConditionalOnProperty(name = "wikiagent.observability.enabled", havingValue = "true", matchIfMissing = true)
 public class CircuitBreakerRegistry {
 

@@ -31,6 +31,7 @@ public class ModelCallRecorder {
         this(repository, pricing, null);
     }
 
+    @org.springframework.beans.factory.annotation.Autowired
     public ModelCallRecorder(ModelCallLogRepository repository, ModelPricingService pricing,
                              ObjectProvider<MeterRegistry> meterRegistryProvider) {
         this.repository = repository;
