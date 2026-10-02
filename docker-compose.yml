@@ -133,6 +133,7 @@ services:
 
   # ============================================================
   # Nginx 接入层（v4 §16 分级架构 - sticky session by X-User-Id）
+  # /api/ 反代后端副本；/ 反代前端（波4 G 管理台）
   # ============================================================
   nginx:
     image: nginx:alpine
@@ -140,10 +141,24 @@ services:
     depends_on:
       - wikiagent-app-1
       - wikiagent-app-2
+      - frontend
     ports:
       - "80:80"
     volumes:
       - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+
+  # ============================================================
+  # 前端管理台（波4 G：Next.js 14 standalone 输出）
+  # 浏览器访问 3000 端口；/api 由 Next rewrites 经 nginx 反代到后端
+  # ============================================================
+  frontend:
+    build: ./frontend
+    container_name: wikiagent-frontend
+    environment:
+      # Next rewrites 目标：经 nginx 接入层路由到后端（保留 X-User-Id sticky）
+      API_BASE_URL: http://nginx
+    ports:
+      - "3000:3000"
 
   # 应用副本 1
   wikiagent-app-1:

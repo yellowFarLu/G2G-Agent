@@ -125,13 +125,13 @@
 
 ## 波次 4：G Next.js 前端（AC-G1..G3）
 
-- [ ] G1 frontend/ 脚手架（Next.js14 App Router + TS + Ant Design + SSE client + API 类型）；dev proxy 8080；Dockerfile+compose
-- [ ] G2 身份设置 + 材料上传（拖拽/多文件/域/重复提示）
-- [ ] G3 任务中心（列表/详情/步骤 SSE 进度/事件/重试）
-- [ ] G4 对话页（SSE+引用角标+来源弹层）
-- [ ] G5 结构化结果（字段表/置信度/冲突）+ 来源查看（页码/片段）
-- [ ] G6 人工工作台（REVIEW/TOOL_APPROVAL/DECRYPT 队列与处置）+ 历史版本/diff
-- [ ] G7 Playwright 全链路 e2e（上传→进度→结果→来源→修改→确认→历史）；lint 门禁
+- [x] G1 frontend/ 脚手架（Next.js14 App Router + TS + Ant Design + SSE client + API 类型）；dev proxy 8080；Dockerfile+compose
+- [x] G2 身份设置 + 材料上传（拖拽/多文件/域/重复提示）
+- [x] G3 任务中心（列表/详情/步骤 SSE 进度/事件/重试）
+- [x] G4 对话页（SSE+引用角标+来源弹层）
+- [x] G5 结构化结果（字段表/置信度/冲突）+ 来源查看（页码/片段）
+- [x] G6 人工工作台（REVIEW/TOOL_APPROVAL/DECRYPT 队列与处置）+ 历史版本/diff
+- [x] G7 Playwright 全链路 e2e（上传→进度→结果→来源→修改→确认→历史）；lint 门禁
 - 闸门：e2e 通过 → fresh review（含可用性 rubric）→ 提交 → 全项目手工执行清单终版 + 合并建议
 
 ---
@@ -139,3 +139,17 @@
 ## 复查问题登记（每波 review 追加）
 
 （波次实施后由 fresh reviewer 填写：问题编号 / 对应 AC / 严重度 / 修复提交 / 复查结果）
+
+### 波4 G 前端复查（fresh review，rubric AC-G3=4/5）
+| # | AC | 严重度 | 问题 | 修复 | 状态 |
+|---|---|---|---|---|---|
+| G-1 | §2.7 | P1 | AdminIdentityPanel 把后端 JSON 字符串 assignedDomains 当数组 | 前端 parse/stringify 适配 | CLOSED |
+| G-2 | §2.7 | P1 | PUT 仅回执却 setProfile(updated) 致视图失真 | 保存后重新 GET | CLOSED |
+| G-3 | 契约 | P1 | ConflictsTab 对 Long id 调 slice 崩页、docId 过滤恒真 | String(id)+去除伪过滤+说明文案 | CLOSED |
+| G-4 | AC-G3 | P2 | 冲突 diff 整段 JSON dump | ChunkCard 提取文件名/域/版本/content 双栏 | CLOSED |
+| G-5 | §2.7 | P2 | EventSource 无法带身份头 | 任务流改 fetch 流式解析带头+重连 | CLOSED |
+| G-6 | AC-G2 | P3 | ExtractedField/ReviewCase id 类型 string 与后端 Long 不符 | 全部改 number | CLOSED |
+| G-7 | AC-G3 | P3 | ChatStage 缺 fallback 阶段 | 补 fallback=兜底应答 | CLOSED |
+| G-8 | AC-G1 | P3 | e2e 未断言 SSE 驱动进度数值 | 快照 RUNNING/30 → SSE→100 → done 终态断言 | CLOSED |
+| - | - | - | e2e 自发现缺陷：ReviewCasesTab 对 Long id 调 slice | #{id} 渲染 | CLOSED（e2e 先行捕获） |
+备注：本机无 Docker 且无 LLM key，AC-G1 全链路 e2e 用 Playwright route mock 后端跑通；real-backend.spec.ts 冒烟用例在 E2E_REAL_BACKEND=1 + 本地 8080 后端时启用；CI frontend job 用官方 chromium（PW_CHROMIUM=1）跑 mock e2e。本机 Chromium 下载受限，本地用系统 Chrome（channel=chrome）。

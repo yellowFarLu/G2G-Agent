@@ -84,10 +84,10 @@ class ProdProfileLoadTest {
                     .isEqualTo("${WIKIAGENT_INTERNAL_SECRET:}");
             assertThat(ProfilePropertySupport.raw(env, "wikiagent.security.pii-minimization.enabled"))
                     .isEqualTo("${WIKIAGENT_PII_MINIMIZATION_ENABLED:true}");
-            assertThat(ProfilePropertySupport.raw(env, "wikiagent.security.rate-limit.enabled"))
-                    .isEqualTo("${WIKIAGENT_RATE_LIMIT_ENABLED:true}");
-            assertThat(ProfilePropertySupport.raw(env, "wikiagent.security.rate-limit.per-user-per-minute"))
-                    .isEqualTo("${WIKIAGENT_RATE_LIMIT_USER_PER_MINUTE:60}");
+            assertThat(ProfilePropertySupport.raw(env, "wikiagent.ratelimit.enabled"))
+                    .isEqualTo("${WIKIAGENT_RATELIMIT_ENABLED:true}");
+            assertThat(ProfilePropertySupport.raw(env, "wikiagent.ratelimit.requests-per-minute"))
+                    .isEqualTo("${WIKIAGENT_RATELIMIT_PER_MINUTE:60}");
 
             // === 任务 MQ / Redis / Session 生产口径 ===
             assertThat(ProfilePropertySupport.raw(env, "wikiagent.task.mq")).isEqualTo("${TASK_MQ:rocketmq}");
