@@ -19,7 +19,10 @@ import com.wikiagent.entity.rule.RuleComputationEntity;
 import com.wikiagent.repo.rule.RuleComputationRepo;
 import org.slf4j.MDC;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import java.time.Instant;
 import java.util.LinkedHashMap;
@@ -39,18 +42,21 @@ public class RuleExecutionService {
     private final ProvenanceService provenance;
     private final ReviewCaseService reviewCaseService;
     private final ObjectMapper mapper;
+    private final PlatformTransactionManager transactionManager;
     private final DeterministicRuleEngine engine = new DeterministicRuleEngine();
 
     public RuleExecutionService(RuleSetService ruleSetService,
                                 RuleComputationRepo computationRepo,
                                 ProvenanceService provenance,
                                 ReviewCaseService reviewCaseService,
-                                ObjectMapper mapper) {
+                                ObjectMapper mapper,
+                                PlatformTransactionManager transactionManager) {
         this.ruleSetService = ruleSetService;
         this.computationRepo = computationRepo;
         this.provenance = provenance;
         this.reviewCaseService = reviewCaseService;
         this.mapper = mapper;
+        this.transactionManager = transactionManager;
         this.parser = new RuleDslParser(mapper);
     }
 
@@ -91,7 +97,20 @@ public class RuleExecutionService {
         RuleComputationEntity origin = computationRepo.findById(computationId)
                 .orElseThrow(() -> new NotFoundException("计算记录不存在: " + computationId));
         RuleSet target = ruleSetService.get(origin.getRuleCode(), targetVersion);
-        Map<String, Object> input = parseJsonMap(origin.getInputSnapshot());
+        // #11 原 input_snapshot 已损坏：先落一条新 FAILED computation（input_snapshot
+        // 原样保留损坏串），再向上抛携带新 computationId 的 RuleEngineException。
+        // FAILED 行走 REQUIRES_NEW 独立事务，避免随外层 replay 回滚丢失。
+        Map<String, Object> input;
+        try {
+            input = parseJsonMap(origin.getInputSnapshot());
+        } catch (RuleEngineException ex) {
+            RuleComputation failed = recordFailedReplay(origin, targetVersion,
+                    origin.getInputSnapshot(),
+                    "回放输入快照解析失败: " + ex.getMessage());
+            throw new RuleEngineException(
+                    "回放失败（输入快照损坏），FAILED computationId=" + failed.id()
+                            + "，原因: " + ex.getMessage(), ex);
+        }
         RuleComputation replayed = doExecute(target, origin.getDocId(), input);
 
         Map<String, Object> oldOut = parseJsonMap(origin.getOutputJson());
@@ -208,8 +227,31 @@ public class RuleExecutionService {
         try {
             return mapper.readValue(json, new TypeReference<>() {});
         } catch (Exception e) {
-            return Map.of();
+            // #11 解析失败不再静默吞成空 Map（会导致回放/应用静默错误结果），
+            // 显式抛 RuleEngineException，由调用方决定落 FAILED 或上抛。
+            throw new RuleEngineException(
+                    "JSON 解析失败: " + e.getClass().getSimpleName() + ": " + e.getMessage(), e);
         }
+    }
+
+    /** #11 在独立事务中落一条 FAILED computation（回放输入快照损坏场景）。 */
+    private RuleComputation recordFailedReplay(RuleComputationEntity origin, int targetVersion,
+                                               String rawInputSnapshot, String error) {
+        TransactionTemplate requiresNew = new TransactionTemplate(transactionManager);
+        requiresNew.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
+        return requiresNew.execute(status -> {
+            RuleComputationEntity e = new RuleComputationEntity();
+            e.setRuleCode(origin.getRuleCode());
+            e.setRuleVersion(targetVersion);
+            e.setDocId(origin.getDocId());
+            e.setInputSnapshot(rawInputSnapshot);
+            e.setTraceId(MDC.get("traceId"));
+            e.setComputedAt(Instant.now());
+            e.setStatus(RuleComputation.ComputationStatus.FAILED.name());
+            e.setError(truncate(error, 512));
+            e.setDurationMs(0L);
+            return toDomain(computationRepo.save(e));
+        });
     }
 
     private String writeJson(Object obj) {
