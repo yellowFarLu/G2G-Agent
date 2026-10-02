@@ -11,9 +11,7 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Service;
 
-import java.io.BufferedReader;
 import java.io.IOException;
-import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -47,13 +45,10 @@ public class FileHandoverRepository implements HandoverRepository {
 
     private final ObjectMapper mapper;
     private final String handoverDir;
-    private final String pythonScript;
 
-    public FileHandoverRepository(@Value("${wikiagent.memory.handover-dir:./data/handover}") String handoverDir,
-                                  @Value("${wikiagent.memory.python-script:scripts/extract_field_index.py}") String pythonScript) {
+    public FileHandoverRepository(@Value("${wikiagent.memory.handover-dir:./data/handover}") String handoverDir) {
         this.mapper = new ObjectMapper();
         this.handoverDir = handoverDir;
-        this.pythonScript = pythonScript;
     }
 
     @Override
@@ -116,34 +111,9 @@ public class FileHandoverRepository implements HandoverRepository {
 
     @Override
     public void refreshFieldIndex(String userId, String sessionId) {
-        // 调用 Python 脚本刷新 field_index.json；Python 不存在或失败不阻断主流程
-        try {
-            Path dir = handoverPath(userId, sessionId);
-            if (!Files.exists(dir)) {
-                return;
-            }
-            String script = pythonScript;
-            ProcessBuilder pb = new ProcessBuilder("python3", script,
-                    "--dir", dir.toString(),
-                    "--sessionId", sessionId);
-            pb.redirectErrorStream(true);
-            Process p = pb.start();
-            try (BufferedReader br = new BufferedReader(new InputStreamReader(p.getInputStream(), StandardCharsets.UTF_8))) {
-                String line;
-                while ((line = br.readLine()) != null) {
-                    log.debug("field_index 脚本输出: {}", line);
-                }
-            }
-            int code = p.waitFor();
-            if (code != 0) {
-                log.warn("field_index 脚本退出码 {} (sessionId={})", code, sessionId);
-            }
-        } catch (IOException | InterruptedException e) {
-            log.warn("field_index 脚本调用失败 sessionId={}: {}", sessionId, e.getMessage());
-            if (e instanceof InterruptedException) {
-                Thread.currentThread().interrupt();
-            }
-        }
+        // 已废弃 Python 脚本调用（需求 16 / 规格 5）：字段索引改由 Java 确定性解析
+        // {@code infrastructure.memory.mysql.DataRefValueResolver}，File 模式下本方法空转。
+        log.debug("refreshFieldIndex 已废弃 Python 路径 userId={} sessionId={}", userId, sessionId);
     }
 
     /** 读取现有 todo.json；不存在则返回空骨架。 */

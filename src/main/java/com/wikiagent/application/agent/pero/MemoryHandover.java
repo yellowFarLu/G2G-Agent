@@ -3,39 +3,53 @@ package com.wikiagent.application.agent.pero;
 import com.wikiagent.domain.agent.Plan;
 import com.wikiagent.domain.agent.PlanStep;
 import com.wikiagent.domain.agent.ReActResult;
+import com.wikiagent.domain.memory.HandoverRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.stereotype.Component;
 
-import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.CopyOnWriteArrayList;
 
 /**
  * v6 §20 Handover 端口的内存默认实现（自洽兜底）。
  * <p>
- * v3-v5 实施时由 {@code FileHandoverRepository} 替换（持久化到 todo.json +
- * Python field_index.json），本类为 v6 自洽的最简内存实现，便于编译启动。
+ * 并发安全：字段使用线程安全容器/访问同步（CopyOnWriteArrayList），
+ * 避免多 AGENT 任务并发时跨任务状态互串（任务框架下同一 Spring 单例被共享）。
  * <p>
- * 并发安全：单实例 + 单 Conversation 顺序执行（PeroAgent 主循环是同步的），
- * 多 Agent 并发场景由 §22 HandoffLock 兜底（v3-v5 实施时加锁）。
+ * 写穿透：init/completeNode/abandonPath 同步写入 {@link HandoverRepository}
+ *（默认 MySQL 四表适配器），使交接清单在崩溃恢复后仍可从持久层读回
+ *（ReadHandoverTool 读侧即 HandoverRepository.load）；持久化失败仅记日志，不阻断主流程。
  */
 @Component
 public class MemoryHandover implements Handover {
 
     private static final Logger log = LoggerFactory.getLogger(MemoryHandover.class);
 
-    private String userId;
-    private String sessionId;
-    private String userInput;
-    private final List<PlanStep> executedNodes = new ArrayList<>();
-    private final List<String> abandonedPaths = new ArrayList<>();
-    private Plan declaredPlan;
+    private final ObjectProvider<HandoverRepository> repositoryProvider;
+
+    public MemoryHandover(ObjectProvider<HandoverRepository> repositoryProvider) {
+        this.repositoryProvider = repositoryProvider;
+    }
+
+    private volatile String userId;
+    private volatile String sessionId;
+    private volatile String userInput;
+    private final List<PlanStep> executedNodes = new CopyOnWriteArrayList<>();
+    private final List<String> abandonedPaths = new CopyOnWriteArrayList<>();
+    private volatile Plan declaredPlan;
 
     @Override
     public void init(String userId, String sessionId, String userInput) {
         this.userId = userId;
         this.sessionId = sessionId;
         this.userInput = userInput;
+        // 单例兜底：新会话初始化时清空上一会话残留，避免跨会话串扰
+        this.executedNodes.clear();
+        this.abandonedPaths.clear();
+        this.declaredPlan = null;
+        writeThrough(repo -> repo.init(userId, sessionId, userInput));
         log.debug("[handover] init userId={} sessionId={}", userId, sessionId);
     }
 
@@ -53,6 +67,7 @@ public class MemoryHandover implements Handover {
     @Override
     public void completeNode(PlanStep step, ReActResult result) {
         executedNodes.add(step);
+        writeThrough(repo -> repo.addExecutedNode(userId, sessionId, step.id(), step.goal()));
         log.debug("[handover] completeNode id={} done={}", step.id(), result.done());
     }
 
@@ -64,6 +79,7 @@ public class MemoryHandover implements Handover {
     @Override
     public void abandonPath(PlanStep step, String reason) {
         abandonedPaths.add(step.id() + ": " + reason);
+        writeThrough(repo -> repo.addAbandonedPath(userId, sessionId, step.id(), reason));
         log.info("[handover] abandonPath id={} reason={}", step.id(), reason);
     }
 
@@ -85,5 +101,18 @@ public class MemoryHandover implements Handover {
 
     public String userInput() {
         return userInput;
+    }
+
+    /** 写穿透：内存更新后同步落库；失败仅记日志，不阻断主流程。 */
+    private void writeThrough(java.util.function.Consumer<HandoverRepository> action) {
+        try {
+            HandoverRepository repo = repositoryProvider.getIfAvailable();
+            if (repo != null) {
+                action.accept(repo);
+            }
+        } catch (Exception e) {
+            log.warn("[handover] 写穿透落库失败（非阻断）userId={} sessionId={} err={}",
+                    userId, sessionId, e.getMessage());
+        }
     }
 }

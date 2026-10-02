@@ -82,8 +82,8 @@ public class JpaTaskRepository implements TaskRepositoryPort {
     }
 
     @Override
-    public void updateHeartbeat(String taskId, Instant at) {
-        dao.updateHeartbeat(taskId, toLocalDateTime(at));
+    public boolean renewLease(String taskId, String workerId, Instant expireAt, Instant at) {
+        return dao.renewLease(taskId, workerId, toLocalDateTime(expireAt), toLocalDateTime(at)) > 0;
     }
 
     @Override

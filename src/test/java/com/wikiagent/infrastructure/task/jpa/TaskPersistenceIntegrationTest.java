@@ -144,4 +144,34 @@ class TaskPersistenceIntegrationTest {
                 .isPresent().get()
                 .extracting(HumanTask::claimedBy).isEqualTo("alice");
     }
+
+    // ⑫ renewLease：仅本 worker + RUNNING 才续期（返回 true）；他人/非 RUNNING 返回 false
+    @Test
+    void renewLeaseOnlyOwnerAndRunning() {
+        String taskId = "tsk_t4_" + uid() + "_8";
+        taskRepository.save(pendingTask(taskId, "biz-renew-" + uid()));
+        Instant expire = Instant.now().plusSeconds(30);
+        assertThat(taskRepository.casLease(taskId, "worker-a", expire)).isTrue();
+
+        // RUNNING 由 casLease 后 save 迁移（模拟 worker 领取流程）
+        TaskInstance t = taskRepository.findByTaskId(taskId).orElseThrow();
+        taskRepository.save(t.withStatus(TaskStatus.RUNNING));
+
+        Instant newExpire = Instant.now().plusSeconds(60);
+        assertThat(taskRepository.renewLease(taskId, "worker-a", newExpire, Instant.now())).isTrue();
+        TaskInstance renewed = taskRepository.findByTaskId(taskId).orElseThrow();
+        assertThat(renewed.leaseExpireAt()).isAfterOrEqualTo(newExpire.minusSeconds(1));
+        assertThat(renewed.heartbeatAt()).isNotNull();
+
+        // 非 owner 续期 → false，leaseExpireAt 不被覆盖
+        assertThat(taskRepository.renewLease(taskId, "worker-b",
+                Instant.now().plusSeconds(120), Instant.now())).isFalse();
+        assertThat(taskRepository.findByTaskId(taskId).orElseThrow().leaseExpireAt())
+                .isEqualTo(renewed.leaseExpireAt());
+
+        // 任务已完成 → false
+        taskRepository.save(taskRepository.findByTaskId(taskId).orElseThrow().withStatus(TaskStatus.COMPLETED));
+        assertThat(taskRepository.renewLease(taskId, "worker-a",
+                Instant.now().plusSeconds(120), Instant.now())).isFalse();
+    }
 }

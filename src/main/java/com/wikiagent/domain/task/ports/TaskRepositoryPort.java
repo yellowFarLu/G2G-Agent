@@ -28,7 +28,9 @@ public interface TaskRepositoryPort {
     /** CAS 抢租约：仅当无主或租约过期时置 owner/expireAt，返回是否成功。 */
     boolean casLease(String taskId, String workerId, Instant expireAt);
 
-    void updateHeartbeat(String taskId, Instant at);
+    /** 心跳续租（DB 权威）：仅当租约仍属于 owner 且任务仍 RUNNING 时刷新 lease_expire_at/heartbeat_at；
+     * 返回 false 表示租约易主或任务状态已变（调用方必须让位，不再写任何任务状态）。 */
+    boolean renewLease(String taskId, String workerId, Instant expireAt, Instant at);
 
     /** 投递成功后记账（outbox 确认时间戳），补偿扫描据此跳过未滞留窗口。 */
     void markEnqueued(String taskId, Instant at);

@@ -11,6 +11,7 @@ import com.wikiagent.domain.task.HumanRequiredException;
 import com.wikiagent.domain.task.HumanTask;
 import com.wikiagent.domain.task.HumanTaskKind;
 import com.wikiagent.domain.task.HumanTaskStatus;
+import com.wikiagent.domain.task.LeaseLostSignalException;
 import com.wikiagent.domain.task.PauseSignalException;
 import com.wikiagent.domain.task.StepDef;
 import com.wikiagent.domain.task.StepResult;
@@ -31,6 +32,8 @@ import com.wikiagent.domain.task.ports.TaskEventRepositoryPort;
 import com.wikiagent.domain.task.ports.TaskRepositoryPort;
 import com.wikiagent.domain.task.ports.TaskStepRepositoryPort;
 import jakarta.annotation.PreDestroy;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
@@ -62,6 +65,8 @@ import java.util.concurrent.atomic.AtomicReference;
 public class TaskWorker implements TaskMessageSink {
 
     private static final ObjectMapper MAPPER = new ObjectMapper();
+
+    private static final Logger log = LoggerFactory.getLogger(TaskWorker.class);
 
     /** 看门狗延迟消息等级：RocketMQ level 4=30s，与默认 leaseTtl 30s 对齐。 */
     private static final int WATCHDOG_DELAY_LEVEL = 4;
@@ -177,10 +182,16 @@ public class TaskWorker implements TaskMessageSink {
                 taskRepo.findByTaskId(taskId).map(TaskInstance::progressPercent).orElse(0));
         heartbeat.scheduleAtFixedRate(() -> {
             try {
+                Instant now = Instant.now();
                 leasePort.renew(taskId, workerId, Duration.ofSeconds(props.getLeaseTtlSec()));
-                taskRepo.updateHeartbeat(taskId, Instant.now());
+                // DB 权威续租：lease_expire_at/heartbeat_at 同步刷新（恢复扫描以 DB 为准）；
+                // 仅本 worker 持有且仍 RUNNING 才生效，返回 false 说明租约易主/已被回收
+                boolean mine = taskRepo.renewLease(taskId, workerId,
+                        now.plus(Duration.ofSeconds(props.getLeaseTtlSec())), now);
+                if (!mine) {
+                    log.warn("心跳续约发现租约易主或任务已回收，本 worker 让位: taskId={} worker={}", taskId, workerId);
+                }
                 progressPort.publish(taskId, progressRef.get(), null);
-                eventRepo.append(event(taskId, TaskEventType.HEARTBEAT, null));
             } catch (Exception ignored) {
                 // 心跳失败不影响主流程；租约过期由恢复扫描兜底（Task 9）
             }
@@ -228,10 +239,13 @@ public class TaskWorker implements TaskMessageSink {
             if (def.no() < startNo) {
                 continue;
             }
-            // ⑤ 步骤边界控制检查（主线程双读）
-            TaskControlContext.set(new TaskControlContext.Ctx(taskId, controlFlagPort, taskRepo));
+            // ⑤ 步骤边界控制检查（主线程双读 + 租约归属校验）
+            TaskControlContext.set(new TaskControlContext.Ctx(taskId, controlFlagPort, taskRepo, workerId));
             try {
                 TaskControlContext.checkpointAndThrowIfSignaled();
+            } catch (LeaseLostSignalException l) {
+                log.info("步骤边界发现租约易主，让位: taskId={} step={}", taskId, def.no());
+                return;
             } catch (PauseSignalException p) {
                 suspendTask(task);
                 return;
@@ -242,11 +256,18 @@ public class TaskWorker implements TaskMessageSink {
                 TaskControlContext.clear();
             }
 
+            // 任务级超时（规格 3.3）：超 deadline 按 TIMEOUT 走统一重试/终态分类
+            if (isDeadlineExceeded(task)) {
+                stepRepo.markFailed(taskId, def.no(), "任务级超时(deadlineSec)", Instant.now());
+                classifyAndTerminate(task, ErrorCode.TIMEOUT, "任务级超时(deadlineSec): " + def.name());
+                return;
+            }
+
             // ⑥ 逐步执行：池内 submit + 步骤超时
             stepRepo.markRunning(taskId, def.no(), Instant.now());
             eventRepo.append(event(taskId, TaskEventType.STEP_START, stepDetail(def)));
             Future<StepResult> future = stepPool.submit(() -> {
-                TaskControlContext.set(new TaskControlContext.Ctx(taskId, controlFlagPort, taskRepo));
+                TaskControlContext.set(new TaskControlContext.Ctx(taskId, controlFlagPort, taskRepo, workerId));
                 try {
                     ctx.setCurrentStepNo(def.no());
                     return handler.executeStep(ctx);
@@ -265,6 +286,10 @@ public class TaskWorker implements TaskMessageSink {
                 return;
             } catch (ExecutionException ee) {
                 Throwable cause = ee.getCause() == null ? ee : ee.getCause();
+                if (cause instanceof LeaseLostSignalException l) {
+                    log.info("步骤执行中发现租约易主，让位: taskId={} step={}", taskId, def.no());
+                    return;
+                }
                 if (cause instanceof PauseSignalException) {
                     suspendTask(task);
                     return;
@@ -305,6 +330,17 @@ public class TaskWorker implements TaskMessageSink {
             }
         }
         completeTask(task, resultRef.get());
+    }
+
+    /** 任务级超时（规格 3.3）：args.deadlineSec 优先，默认 defaults.deadline-sec；自 createdAt 起算。 */
+    private boolean isDeadlineExceeded(TaskInstance task) {
+        JsonNode d = task.payload() == null ? null : task.payload().get("deadlineSec");
+        int deadlineSec = d != null && d.isInt() && d.intValue() > 0
+                ? d.intValue() : props.getDefaults().getDeadlineSec();
+        if (deadlineSec <= 0 || task.createdAt() == null) {
+            return false;
+        }
+        return Instant.now().isAfter(task.createdAt().plus(Duration.ofSeconds(deadlineSec)));
     }
 
     /** ⑦ 可重试且未超上限 → RETRY 退避重投；否则 FAILED。 */
@@ -414,9 +450,16 @@ public class TaskWorker implements TaskMessageSink {
         if (yieldToCancelFlow(taskId, task)) {
             return;
         }
-        humanRepo.save(new HumanTask(null, taskId, def.no(), h.getKind(), h.getTitle(),
-                h.getInstruction(), h.getFormSchema(), null, HumanTaskStatus.OPEN,
-                null, null, null, null, 0, Instant.now()));
+        // 幂等：同一 (taskId, stepNo, kind) 的未决接管点已存在则复用，
+        // 防 Worker 重跑同一 HumanRequired 步骤重复建单撞 uk_task_step_kind
+        boolean exists = humanRepo.findByTaskId(taskId).stream().anyMatch(x ->
+                x.stepNo() == def.no() && x.kind() == h.getKind()
+                        && (x.status() == HumanTaskStatus.OPEN || x.status() == HumanTaskStatus.CLAIMED));
+        if (!exists) {
+            humanRepo.save(new HumanTask(null, taskId, def.no(), h.getKind(), h.getTitle(),
+                    h.getInstruction(), h.getFormSchema(), null, HumanTaskStatus.OPEN,
+                    null, null, null, null, 0, Instant.now()));
+        }
         TaskInstance base = taskRepo.findByTaskId(taskId).orElse(task);
         TaskInstance updated = base
                 .withStatus(TaskStateMachine.transition(base.status(), TaskEventType.WAIT_HUMAN))

@@ -115,8 +115,7 @@ wikiagent:
   memory:
     short-term-max-turns: 20          # 短期记忆最多 20 轮
     short-term-ttl-hours: 24           # Redis TTL 24h
-    handover-dir: ./data/handover      # 交接清单存储目录
-    python-script: scripts/extract_field_index.py
+    handover-dir: ./data/handover      # 交接清单存储目录（file 模式/历史迁移用）
     # 子项目 A §5：交接清单适配器，交付后默认 mysql（file 实现保留供回退）
     handover-adapter: ${WIKIAGENT_MEMORY_HANDOVER_ADAPTER:mysql}   # file | mysql
     # 一次性历史文件迁移开关：开发默认 false；docker compose 初始化置 true

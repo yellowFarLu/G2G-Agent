@@ -54,9 +54,15 @@ public interface TaskInstanceJpaDao extends JpaRepository<TaskInstanceEntity, Lo
                  @Param("expireAt") LocalDateTime expireAt,
                  @Param("now") LocalDateTime now);
 
+    /** 心跳续租（DB 权威）：仅本 worker 持有且仍 RUNNING 才续期，返回 0 表示租约易主或状态已变。 */
     @Modifying(flushAutomatically = true)
-    @Query("update TaskInstanceEntity t set t.heartbeatAt = :at, t.updatedAt = :at where t.taskId = :taskId")
-    int updateHeartbeat(@Param("taskId") String taskId, @Param("at") LocalDateTime at);
+    @Query("""
+            update TaskInstanceEntity t
+            set t.leaseExpireAt = :expireAt, t.heartbeatAt = :at, t.updatedAt = :at
+            where t.taskId = :taskId and t.leaseOwner = :owner and t.status = 'RUNNING'
+            """)
+    int renewLease(@Param("taskId") String taskId, @Param("owner") String owner,
+                   @Param("expireAt") LocalDateTime expireAt, @Param("at") LocalDateTime at);
 
     @Modifying(flushAutomatically = true)
     @Query("update TaskInstanceEntity t set t.enqueueAt = :at, t.updatedAt = :at where t.taskId = :taskId")

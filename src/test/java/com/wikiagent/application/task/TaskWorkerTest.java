@@ -463,4 +463,99 @@ class TaskWorkerTest {
                 .extracting(TaskInstance::status).isEqualTo(TaskStatus.SUSPENDED);
         assertThat(handler.countOf(1)).isZero();
     }
+
+    /** 任务级超时场景：payload.deadlineSec=1 且 createdAt 已过期。 */
+    private TaskInstance expiredDeadlineTask(String taskId, String type) {
+        return new TaskInstance(taskId, type, "biz-" + uid(), TaskStatus.PENDING,
+                mapper.createObjectNode().put("docId", "d1").put("deadlineSec", 1),
+                0, 3, 0, null, null, null,
+                null, "user-1", null, null, null, null, null,
+                Instant.now(), null, 0,
+                Instant.now().minusSeconds(3600), Instant.now());
+    }
+
+    // ⑫ 任务级超时（规格 3.3）：超 deadline → TIMEOUT 重试（步骤不执行），attempt 耗尽 → FAILED
+    @Test
+    void deadlineExceededRetriesThenFails() {
+        String taskId = "tsk_t8_" + uid();
+        repo.save(expiredDeadlineTask(taskId, "T8DEADLINE"));
+        FakeHandler handler = new FakeHandler("T8DEADLINE",
+                List.of(StepDef.of(1, "A", "s1")), (no, ctx) -> {
+                    handlerRef.get().touch(no);
+                    return StepResult.done(50);
+                });
+        handlerRef.set(handler);
+        registry.register(handler);
+
+        worker.onMessage(taskId, "T8DEADLINE");  // attempt0 → 超时重试
+        assertThat(repo.findByTaskId(taskId)).isPresent().get()
+                .extracting(TaskInstance::status).isEqualTo(TaskStatus.PENDING);
+        assertThat(repo.findByTaskId(taskId).orElseThrow().attempt()).isEqualTo(1);
+        assertThat(repo.findByTaskId(taskId).orElseThrow().errorCode()).isEqualTo(ErrorCode.TIMEOUT);
+        assertThat(handler.countOf(1)).isZero();
+
+        worker.onMessage(taskId, "T8DEADLINE");  // attempt1 → 重试
+        worker.onMessage(taskId, "T8DEADLINE");  // attempt2 → 重试（attempt=3 达上限）
+        worker.onMessage(taskId, "T8DEADLINE");  // attempt3 → FAILED
+        assertThat(repo.findByTaskId(taskId)).isPresent().get()
+                .extracting(TaskInstance::status).isEqualTo(TaskStatus.FAILED);
+        assertThat(repo.findByTaskId(taskId).orElseThrow().errorCode()).isEqualTo(ErrorCode.TIMEOUT);
+        assertThat(handler.countOf(1)).isZero();
+    }
+
+    // ⑬ HumanRequired 幂等：重复进入同一接管点不重复建单（防撞 uk_task_step_kind）
+    @Test
+    void humanRequiredIsIdempotentAcrossReruns() {
+        String taskId = "tsk_t8_" + uid();
+        repo.save(pendingTask(taskId, "T8HUMANIDEM"));
+        FakeHandler handler = new FakeHandler("T8HUMANIDEM",
+                List.of(StepDef.of(1, "A", "s1").withHumanCheckpoint(true)),
+                (no, ctx) -> {
+                    throw new HumanRequiredException(HumanTaskKind.INPUT, "需要补充信息",
+                            "请提供文档密级", mapper.createObjectNode().put("field", "level"));
+                });
+        registry.register(handler);
+
+        worker.onMessage(taskId, "T8HUMANIDEM");
+        assertThat(humanRepo.findByTaskId(taskId)).hasSize(1);
+
+        // 模拟 Worker 重跑同一任务（恢复/重投）：状态回 PENDING 再入队
+        repo.save(withStatus(repo.findByTaskId(taskId).orElseThrow(), TaskStatus.PENDING));
+        worker.onMessage(taskId, "T8HUMANIDEM");
+
+        assertThat(repo.findByTaskId(taskId)).isPresent().get()
+                .extracting(TaskInstance::status).isEqualTo(TaskStatus.WAITING_HUMAN);
+        assertThat(humanRepo.findByTaskId(taskId)).hasSize(1);
+    }
+
+    // ⑭ 租约易主：步骤边界发现 owner 变更 → 安静让位（不写终态、不执行后续步骤）
+    @Test
+    void leaseLostAtStepBoundaryYieldsSilently() {
+        String taskId = "tsk_t8_" + uid();
+        repo.save(pendingTask(taskId, "T8LEASELOST"));
+        FakeHandler handler = new FakeHandler("T8LEASELOST",
+                List.of(StepDef.of(1, "A", "s1"), StepDef.of(2, "B", "s2")),
+                (no, ctx) -> {
+                    handlerRef.get().touch(no);
+                    if (no == 1) {
+                        // 步骤执行期间模拟租约被回收并重投给另一 worker
+                        repo.save(repo.findByTaskId(taskId).orElseThrow()
+                                .withLease("w-other", Instant.now().plusSeconds(30)));
+                    }
+                    return StepResult.done(no * 50);
+                });
+        handlerRef.set(handler);
+        registry.register(handler);
+
+        worker.onMessage(taskId, "T8LEASELOST");
+
+        TaskInstance task = repo.findByTaskId(taskId).orElseThrow();
+        assertThat(task.status()).isEqualTo(TaskStatus.RUNNING); // 未写任何终态
+        assertThat(task.leaseOwner()).isEqualTo("w-other");
+        assertThat(handler.countOf(1)).isEqualTo(1);
+        assertThat(handler.countOf(2)).isZero(); // 易主后不再执行
+        assertThat(eventRepo.findByTaskId(taskId).stream()
+                .map(com.wikiagent.domain.task.TaskEvent::eventType))
+                .doesNotContain(TaskEventType.COMPLETE, TaskEventType.FAIL);
+    }
 }

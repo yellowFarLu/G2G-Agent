@@ -204,4 +204,24 @@ class TaskSubmissionServiceTest {
         assertThatThrownBy(() -> service.replay(taskId, "admin-1"))
                 .isInstanceOf(IllegalStateException.class);
     }
+
+    // ⑧ 并发同 bizKey 提交：一方撞 uk_biz_key 后回查返回既有任务（不抛出 500）
+    @Test
+    void concurrentSameBizKeyFallsBackToExisting() {
+        String bizKey = "biz-conc-" + uid();
+        TaskPayload p = new TaskPayload("T9SUB", bizKey, "user-1", null, null,
+                mapper.createObjectNode(), null, null);
+        TaskInstance first = service.submit(p);
+
+        // 直接 save 同 bizKey 模拟并发撞库，再经 submit 回查
+        TaskInstance concurrent = new TaskInstance(TaskIds.next(), "T9SUB", bizKey, TaskStatus.PENDING,
+                mapper.createObjectNode(), 0, 3, 0, null, null, null,
+                null, "user-1", null, Instant.now(), null, null, null,
+                Instant.now(), null, 0, Instant.now(), Instant.now());
+        assertThatThrownBy(() -> repo.save(concurrent))
+                .isInstanceOf(org.springframework.dao.DataIntegrityViolationException.class);
+
+        TaskInstance returned = service.submit(p);
+        assertThat(returned.taskId()).isEqualTo(first.taskId());
+    }
 }

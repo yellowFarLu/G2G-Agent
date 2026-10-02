@@ -16,6 +16,8 @@ import org.slf4j.LoggerFactory;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Service;
 
+import org.springframework.dao.DataIntegrityViolationException;
+
 import java.time.Instant;
 import java.util.Optional;
 import java.util.UUID;
@@ -59,9 +61,16 @@ public class TaskSubmissionService {
                 0, maxAttempts, 0, null, null, null,
                 p.idempotencyKey(), p.submittedBy(), p.tenantId(),
                 now, null, null, null, now, null, 0, now, now);
+        try {
+            taskRepo.save(task);
+        } catch (DataIntegrityViolationException e) {
+            // uk_biz_key 并发冲突：回查返回既有任务（幂等护栏兜底，SUBMIT 事件不重复落库）
+            log.warn("并发提交撞唯一键，回查已有任务 bizKey={}", bizKey);
+            return taskRepo.findByBizKey(bizKey)
+                    .orElseThrow(() -> new IllegalStateException("并发回查失败", e));
+        }
         eventRepo.append(new TaskEvent(task.taskId(), TaskEventType.SUBMIT, ActorType.USER,
                 p.submittedBy(), null, now));
-        taskRepo.save(task);
         try {
             dispatcher.dispatch(task.taskId(), task.taskType(), 0);
             taskRepo.markEnqueued(task.taskId(), Instant.now());

@@ -120,7 +120,7 @@ CREATE TABLE IF NOT EXISTS handover_node (
     created_at      TIMESTAMP    NOT NULL
 );
 
-CREATE INDEX IF NOT EXISTS idx_handover_checklist ON handover_node (checklist_id);
+CREATE INDEX IF NOT EXISTS idx_checklist ON handover_node (checklist_id);
 
 CREATE TABLE IF NOT EXISTS handover_abandoned_path (
     id           BIGINT      NOT NULL AUTO_INCREMENT PRIMARY KEY,
