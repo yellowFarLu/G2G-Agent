@@ -78,7 +78,7 @@ class RetrievalRerankLogTest {
     void 重排成功时顺序改变并写SUCCESS日志() {
         RestClient.Builder builder = RestClient.builder();
         MockRestServiceServer server = MockRestServiceServer.bindTo(builder).build();
-        server.expect(request -> true)
+        server.expect(org.springframework.test.web.client.match.MockRestRequestMatchers.anything())
                 .andRespond(withSuccess("""
                         {"output":{"results":[
                           {"index":1,"relevance_score":0.9},
@@ -107,7 +107,8 @@ class RetrievalRerankLogTest {
     void http500时保持原序并写FAILED日志() {
         RestClient.Builder builder = RestClient.builder();
         MockRestServiceServer server = MockRestServiceServer.bindTo(builder).build();
-        server.expect(request -> true).andRespond(withServerError());
+        server.expect(org.springframework.test.web.client.match.MockRestRequestMatchers.anything())
+                .andRespond(withServerError());
 
         DashScopeRerankProvider provider =
                 new DashScopeRerankProvider("k", true, builder.baseUrl(URL).build(), "gte-rerank");

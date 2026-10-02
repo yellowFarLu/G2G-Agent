@@ -65,8 +65,11 @@ public class DashScopeRerankProvider implements RerankProvider {
                 model);
     }
 
-    /** 测试构造：注入 MockRestServiceServer 绑定的 RestClient。 */
-    DashScopeRerankProvider(String apiKey, boolean enabled, RestClient restClient, String model) {
+    /**
+     * 测试构造：注入 MockRestServiceServer 绑定的 RestClient（跨包测试需要，故 public；
+     * 生产装配使用 {@link #DashScopeRerankProvider(String, boolean, String, String)}）。
+     */
+    public DashScopeRerankProvider(String apiKey, boolean enabled, RestClient restClient, String model) {
         this.model = model == null ? "gte-rerank" : model;
         this.apiKey = apiKey == null ? "" : apiKey.trim();
         this.enabled = enabled;
