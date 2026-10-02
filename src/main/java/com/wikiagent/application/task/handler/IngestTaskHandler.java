@@ -55,12 +55,23 @@ public class IngestTaskHandler implements TaskHandler {
 
     private final IngestionService ingestion;
     private final ParseInputValidator validator;
+    private final org.springframework.beans.factory.ObjectProvider<com.wikiagent.domain.task.ports.HumanTaskRepositoryPort> humanTaskRepo;
+    private final org.springframework.beans.factory.ObjectProvider<com.wikiagent.application.rule.ReviewCaseService> reviewCaseService;
 
-    /** 自动装配构造器：含介质判定器，用于条件化动态步骤。 */
+    /** 自动装配构造器：含介质判定器 + D 复核接线（ObjectProvider 懒获取，不影响无 D 依赖的测试）。 */
     @Autowired
-    public IngestTaskHandler(IngestionService ingestion, ParseInputValidator validator) {
+    public IngestTaskHandler(IngestionService ingestion, ParseInputValidator validator,
+                             org.springframework.beans.factory.ObjectProvider<com.wikiagent.domain.task.ports.HumanTaskRepositoryPort> humanTaskRepo,
+                             org.springframework.beans.factory.ObjectProvider<com.wikiagent.application.rule.ReviewCaseService> reviewCaseService) {
         this.ingestion = ingestion;
         this.validator = validator;
+        this.humanTaskRepo = humanTaskRepo;
+        this.reviewCaseService = reviewCaseService;
+    }
+
+    /** 测试用构造器：仅基础六步路径，不触发条件化分支。 */
+    public IngestTaskHandler(IngestionService ingestion, ParseInputValidator validator) {
+        this(ingestion, validator, null, null);
     }
 
     /** 测试用构造器：仅基础六步路径，不触发条件化分支。 */
@@ -194,8 +205,35 @@ public class IngestTaskHandler implements TaskHandler {
         if (schemaKey == null || schemaKey.isBlank()) {
             return StepResult.skipped();
         }
+        // D 钩子①：若本任务已有 RESOLVED 的 REVIEW 人工任务（字段已人工定稿），跳过 LLM 抽取
+        if (humanTaskRepo != null) {
+            var repo = humanTaskRepo.getIfAvailable();
+            if (repo != null) {
+                boolean reviewed = repo.findByTaskId(ctx.taskId()).stream()
+                        .anyMatch(h -> h.kind() == HumanTaskKind.REVIEW
+                                && h.status() == com.wikiagent.domain.task.HumanTaskStatus.RESOLVED);
+                if (reviewed) {
+                    return StepResult.done(95);
+                }
+            }
+        }
         ExtractionReport report = ingestion.extractStep(docId, schemaKey);
         if (report.needsReview()) {
+            // D 钩子②：每个 invalid 或低置信字段建 LOW_CONFIDENCE 复核案件（taskId 关联）
+            if (reviewCaseService != null) {
+                var svc = reviewCaseService.getIfAvailable();
+                if (svc != null) {
+                    for (var field : report.fields()) {
+                        boolean lowConf = field.lowConfidence(0.75);
+                        if (!field.valid() || lowConf) {
+                            svc.createLowConfidence(docId, null, field.key(),
+                                    field.source() == null ? null : field.source().name(),
+                                    field.confidence(),
+                                    String.join("; ", field.errors()), ctx.taskId());
+                        }
+                    }
+                }
+            }
             // 低置信/校验失败：建 REVIEW 人工任务，由人工复核/修正字段（审批语义，不依赖表单值续跑）
             throw new HumanRequiredException(HumanTaskKind.REVIEW,
                     "字段抽取结果需要人工复核",
