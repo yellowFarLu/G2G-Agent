@@ -5,6 +5,11 @@ import com.wikiagent.domain.agent.PlanStep;
 import com.wikiagent.domain.agent.ReActResult;
 import com.wikiagent.domain.agent.ReActStep;
 import com.wikiagent.domain.agent.ThoughtActionObservation;
+import com.wikiagent.domain.task.ErrorCode;
+import com.wikiagent.domain.task.FatalTaskException;
+import com.wikiagent.domain.task.HumanRequiredException;
+import com.wikiagent.domain.task.HumanTaskKind;
+import com.wikiagent.domain.task.TaskBudget;
 import com.wikiagent.domain.tool.ToolCaller;
 import com.wikiagent.infrastructure.trace.AuditLogRepository;
 import com.wikiagent.service.agent.JsonExtractor;
@@ -112,6 +117,8 @@ public class ReActExecutor {
 
         for (int i = 0; i < limit; i++) {
             iterationGate.run();
+            // F2：预算检查（迭代边界）——超限即停止，按策略转人工或致命失败
+            checkBudget(governance);
             TraceSpan sub = trace.start(conversationId, ctx.userId(),
                     "react:" + step.id() + ":" + (i + 1), step.goal());
             ReActStep ra;
@@ -122,6 +129,8 @@ public class ReActExecutor {
                 log.warn("ReAct step {} iter {} 调用失败: {}", step.id(), i + 1, e.getMessage());
                 return ReActResult.truncated(traceList);
             }
+            // F2：迭代后计量（+tokens、+cost、+1 iteration），sink 回调写回 payload
+            chargeBudget(governance, prompt);
 
             String observation;
             if (ra.action() == null || "FINAL".equalsIgnoreCase(nameOf(ra))) {
@@ -210,6 +219,54 @@ public class ReActExecutor {
             finalAnswer = null;
         }
         return new ReActStep(thought, action, finalAnswer);
+    }
+
+    /** 估算每 1K token 成本（USD），治理计费用（与真实供应商价格解耦的标称值）。 */
+    static final double COST_PER_1K_TOKENS = 0.002d;
+
+    /**
+     * F2：迭代边界预算检查。超限按策略抛出：
+     * PAUSE_HUMAN → HumanRequiredException(INPUT, "预算超限", ...)（表单可填新上限提额续跑）；
+     * FAIL → FatalTaskException(BUDGET_EXCEEDED)。
+     */
+    private void checkBudget(ReActGovernance governance) {
+        if (governance == null || governance.budgetTracker() == null) {
+            return;
+        }
+        var budget = governance.budgetTracker().current();
+        String exceeded = budget.exceededBy();
+        if (exceeded == null) {
+            return;
+        }
+        String msg = "预算超限: " + exceeded;
+        if (budget.overflowPolicy() == TaskBudget.OverflowPolicy.FAIL) {
+            throw new FatalTaskException(ErrorCode.BUDGET_EXCEEDED, msg);
+        }
+        throw new HumanRequiredException(HumanTaskKind.INPUT, "预算超限",
+                msg + "；请提高预算上限（iterationLimit / tokenLimit / costLimit）或终结任务",
+                buildBudgetFormSchema(budget));
+    }
+
+    /** F2：预算超限表单 schema（供人工提额）。 */
+    private static com.fasterxml.jackson.databind.JsonNode buildBudgetFormSchema(TaskBudget budget) {
+        var schema = new com.fasterxml.jackson.databind.ObjectMapper().createObjectNode();
+        schema.put("iterationLimit", "integer(当前 " + budget.iterationLimit() + ")");
+        schema.put("tokenLimit", "integer(当前 " + budget.tokenLimit() + ")");
+        schema.put("costLimit", "number(当前 " + budget.costLimit() + ")");
+        return schema;
+    }
+
+    /** F2：迭代后记账（粗估：4 字符 ≈ 1 token；prompt+输出合并计量）。 */
+    private void chargeBudget(ReActGovernance governance, String prompt) {
+        if (governance == null || governance.budgetTracker() == null) {
+            return;
+        }
+        try {
+            long tokens = Math.max(1, (prompt == null ? 0 : prompt.length()) / 4L);
+            governance.budgetTracker().charge(tokens, tokens * COST_PER_1K_TOKENS / 1000d);
+        } catch (Exception e) {
+            log.warn("预算记账失败（不阻断执行）: {}", e.getMessage());
+        }
     }
 
     /** F1：TOOL_DENIED 审计落库（eventType=TOOL_DENIED，含 toolName/userId/reason）。 */

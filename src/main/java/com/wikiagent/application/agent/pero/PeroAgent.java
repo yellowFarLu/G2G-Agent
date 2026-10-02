@@ -5,6 +5,8 @@ import com.wikiagent.domain.agent.PlanStep;
 import com.wikiagent.domain.agent.ReActResult;
 import com.wikiagent.domain.agent.Reflection;
 import com.wikiagent.domain.task.ControlSignalException;
+import com.wikiagent.domain.task.FatalTaskException;
+import com.wikiagent.domain.task.HumanRequiredException;
 import com.wikiagent.service.chat.SseSender;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -151,6 +153,10 @@ public class PeroAgent {
             } catch (ControlSignalException c) {
                 // 暂停/取消：原样穿出，节点不 failNode（Task 12 冻结语义）
                 throw c;
+            } catch (HumanRequiredException | FatalTaskException g) {
+                // F2/F3 治理信号（预算超限转人工/致命失败、高危工具批准）：原样穿出，
+                // 不进入失败反思/重试，由任务框架 worker 建人工任务或终态
+                throw g;
             } catch (Exception e) {
                 handover.failNode(step, e.getMessage());
                 trace.end(nodeSpan, null, "ERROR", e.getMessage());

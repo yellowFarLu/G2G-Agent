@@ -5,14 +5,17 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.wikiagent.application.agent.ToolPermissionRegistry;
+import com.wikiagent.application.agent.pero.BudgetTracker;
 import com.wikiagent.application.agent.pero.PeroAgent;
 import com.wikiagent.application.agent.pero.PeroLoopHook;
 import com.wikiagent.application.agent.pero.Perception;
 import com.wikiagent.application.agent.pero.ReActGovernance;
+import com.wikiagent.application.task.TaskBudgetPersistencePort;
 import com.wikiagent.application.task.TaskControlContext;
 import com.wikiagent.application.task.TaskStreamBus;
 import com.wikiagent.domain.agent.Plan;
 import com.wikiagent.domain.agent.PlanStep;
+import com.wikiagent.domain.task.TaskBudget;
 import com.wikiagent.domain.tool.ToolCaller;
 import com.wikiagent.domain.task.ErrorCode;
 import com.wikiagent.domain.task.FatalTaskException;
@@ -61,18 +64,22 @@ public class AgentTaskHandler implements TaskHandler {
     private final TaskStreamBus streamBus;
     /** F1：工具权限注册表（可为 null：缺省时 NODE 步不做权限拦截）。 */
     private final ToolPermissionRegistry permissionRegistry;
+    /** F2：预算持久化端口（worker 注入；缺省时预算仅在内存计量不落库）。 */
+    private final TaskBudgetPersistencePort budgetPersistence;
 
     public AgentTaskHandler(PeroAgent peroAgent, Handover handover, TaskStreamBus streamBus) {
-        this(peroAgent, handover, streamBus, null);
+        this(peroAgent, handover, streamBus, null, null);
     }
 
     @org.springframework.beans.factory.annotation.Autowired
     public AgentTaskHandler(PeroAgent peroAgent, Handover handover, TaskStreamBus streamBus,
-                            ToolPermissionRegistry permissionRegistry) {
+                            ToolPermissionRegistry permissionRegistry,
+                            TaskBudgetPersistencePort budgetPersistence) {
         this.peroAgent = peroAgent;
         this.handover = handover;
         this.streamBus = streamBus;
         this.permissionRegistry = permissionRegistry;
+        this.budgetPersistence = budgetPersistence;
     }
 
     @Override
@@ -193,12 +200,14 @@ public class AgentTaskHandler implements TaskHandler {
     }
 
     /**
-     * F1：从 payload.args 构造 ReAct 治理上下文。
+     * F1/F2：从 payload.args 构造 ReAct 治理上下文。
      * agentName 取 args.agentName（默认 "pero-agent"）；caller 的 role/scope 取
-     * args.userRole / args.userScope（逗号分隔）。permissionRegistry 缺省时返回 null（不拦截）。
+     * args.userRole / args.userScope（逗号分隔）；预算取 args.budget（F2，缺省系统封顶），
+     * 人工提额（humanInputs 中的 iterationLimit/tokenLimit/costLimit）覆盖上限。
+     * 无任何治理组件时返回 null（不拦截/不计量，行为与治理前一致）。
      */
     private ReActGovernance governanceOf(TaskExecutionContext ctx, String userId, String sessionId) {
-        if (permissionRegistry == null) {
+        if (permissionRegistry == null && budgetPersistence == null) {
             return null;
         }
         JsonNode args = ctx.args();
@@ -213,7 +222,39 @@ public class AgentTaskHandler implements TaskHandler {
                 }
             }
         }
-        return ReActGovernance.of(ToolCaller.of(userId, role, scopes), agentName, sessionId);
+        return new ReActGovernance(ToolCaller.of(userId, role, scopes), agentName, sessionId,
+                budgetTrackerOf(ctx), java.util.Map.of());
+    }
+
+    /**
+     * F2：预算记账器构造。预算快照从 payload.args.budget 读回（断点恢复不重置）；
+     * 人工提额（INPUT 表单中的 iterationLimit/tokenLimit/costLimit）覆盖上限（仍受系统封顶）；
+     * sink 把每轮最新预算经 {@link TaskBudgetPersistencePort} 写回 payload.budget。
+     */
+    private BudgetTracker budgetTrackerOf(TaskExecutionContext ctx) {
+        if (budgetPersistence == null) {
+            return null;
+        }
+        JsonNode budgetNode = ctx.args() == null ? null : ctx.args().get("budget");
+        TaskBudget budget = TaskBudget.fromJson(budgetNode);
+        // 人工提额：预算超限 INPUT 表单字段覆盖上限（worker 已把 formValue 平铺进 humanInputs）
+        JsonNode iterOverride = ctx.humanInputs().get("iterationLimit");
+        JsonNode tokenOverride = ctx.humanInputs().get("tokenLimit");
+        JsonNode costOverride = ctx.humanInputs().get("costLimit");
+        if (iterOverride != null || tokenOverride != null || costOverride != null) {
+            budget = budget.withLimits(
+                    tokenOverride != null && tokenOverride.isNumber() ? tokenOverride.longValue() : null,
+                    costOverride != null && costOverride.isNumber() ? costOverride.doubleValue() : null,
+                    iterOverride != null && iterOverride.isNumber() ? iterOverride.intValue() : null);
+        }
+        return new BudgetTracker(budget, b -> {
+            // 双写：① 原地更新 ctx.args() 快照（同一 run 内后续 NODE 步读到最新用量）；
+            //       ② 经端口落库 payload.budget（断点恢复不重置）
+            if (ctx.args() instanceof ObjectNode on) {
+                on.set("budget", b.toJson());
+            }
+            budgetPersistence.saveBudget(ctx.taskId(), b);
+        });
     }
 
     private static String textArg(JsonNode args, String key, String def) {
