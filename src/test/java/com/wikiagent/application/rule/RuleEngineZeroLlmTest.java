@@ -1,6 +1,8 @@
 package com.wikiagent.application.rule;
 
+import com.wikiagent.domain.llm.ModelCallLogPurpose;
 import com.wikiagent.infrastructure.extract.LlmFieldExtractionClient;
+import com.wikiagent.infrastructure.persistence.llm.ModelCallLogJpaDao;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -37,6 +39,9 @@ class RuleEngineZeroLlmTest {
     @Autowired
     private RuleExecutionService executionService;
 
+    @Autowired
+    private ModelCallLogJpaDao modelCallLogDao;
+
     @Test
     void computeNeverCallsLlm() {
         String code = "zero-llm-" + System.nanoTime();
@@ -56,5 +61,11 @@ class RuleEngineZeroLlmTest {
         verifyNoInteractions(intentChatModel);
         verifyNoInteractions(simpleChatModel);
         verifyNoInteractions(complexChatModel);
+
+        // AC-D3 规则确定性计算不得写任何 purpose=RULED 的模型调用打点
+        long ruledCalls = modelCallLogDao.findAll().stream()
+                .filter(log -> ModelCallLogPurpose.RULED.name().equals(log.getPurpose()))
+                .count();
+        assertThat(ruledCalls).as("规则计算不得产生 purpose=RULED 的模型调用记录").isZero();
     }
 }
