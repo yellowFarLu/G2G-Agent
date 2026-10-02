@@ -6,6 +6,7 @@ import com.wikiagent.domain.agent.PlanStep;
 import com.wikiagent.domain.agent.ReActResult;
 import com.wikiagent.domain.task.HumanRequiredException;
 import com.wikiagent.domain.task.HumanTaskKind;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.ai.chat.messages.AssistantMessage;
@@ -110,6 +111,11 @@ class ReActApprovalTest {
                     assertThat(h.getKind()).isEqualTo(HumanTaskKind.TOOL_APPROVAL);
                     assertThat(h.getTitle()).contains("工具批准");
                     assertThat(h.getFormSchema().get("toolName").asText()).isEqualTo(TOOL);
+                    // #18 formSchema 必须携带 args 指纹；args="{}" 指纹=sha256("{}")
+                    String fingerprint = h.getFormSchema().get("argsFingerprint").asText();
+                    assertThat(fingerprint)
+                            .isEqualTo(ReActExecutor.approvalKey(TOOL, "{}")
+                                    .substring(TOOL.length() + 1));
                 });
         assertThat(toolInvoked).isFalse();
     }
@@ -118,9 +124,10 @@ class ReActApprovalTest {
     void approvedDecisionExecutesTool() {
         stubReAct(true, false, null);
 
+        // #18 决策键为 toolName+args 指纹复合键（args="{}"）
         ReActResult result = executor(registryRequiringApproval()).execute(STEP,
                 new SimplePerception("u1", "s1", "问"), null, 8, () -> { },
-                governance(Map.of(TOOL, true)));
+                governance(Map.of(ReActExecutor.approvalKey(TOOL, "{}"), true)));
 
         assertThat(result.done()).isTrue();
         assertThat(toolInvoked).isTrue();
@@ -134,11 +141,76 @@ class ReActApprovalTest {
 
         ReActResult result = executor(registryRequiringApproval()).execute(STEP,
                 new SimplePerception("u1", "s1", "问"), null, 8, () -> { },
-                governance(Map.of(TOOL, false)));
+                governance(Map.of(ReActExecutor.approvalKey(TOOL, "{}"), false)));
 
         assertThat(result.done()).isTrue();
         assertThat(toolInvoked).isFalse();
         assertThat(result.trace()).anyMatch(t -> "TOOL_REJECTED_BY_USER".equals(t.observation()));
+    }
+
+    /** #18 批准只对批准时的 args 生效：批准 A 后同工具以 args=B 调用必须重新走人工批准。 */
+    @Test
+    void approvalIsScopedToArgsDifferentArgsRequiresNewApproval() {
+        String argsA = "{\"q\":\"a\"}";
+        String argsB = "{\"q\":\"b\"}";
+        stubActionArgs(List.of(argsA, argsB));
+
+        assertThatThrownBy(() -> executor(registryRequiringApproval()).execute(STEP,
+                new SimplePerception("u1", "s1", "问"), null, 8, () -> { },
+                governance(Map.of(ReActExecutor.approvalKey(TOOL, argsA), true))))
+                .isInstanceOfSatisfying(HumanRequiredException.class, h -> {
+                    assertThat(h.getKind()).isEqualTo(HumanTaskKind.TOOL_APPROVAL);
+                    // 新人工任务的指纹必须是 args=B 的指纹（而非已批准的 A）
+                    assertThat(h.getFormSchema().get("argsFingerprint").asText())
+                            .isEqualTo(ReActExecutor.argsFingerprint(argsB));
+                });
+        // A 已批准放行执行过一次；B 未批准不得执行
+        assertThat(toolInvoked).isTrue();
+    }
+
+    /** #18 同工具同 args 第二次调用在批准有效期内直接放行（规范化后键序不同也视为同参）。 */
+    @Test
+    void sameArgsSecondCallIsAllowedAndKeyOrderNormalized() {
+        String argsA = "{\"q\":\"a\"}";
+        String argsAReordered = "{ \"q\" : \"a\" }";
+        assertThat(ReActExecutor.approvalKey(TOOL, argsA))
+                .as("空白差异不影响指纹")
+                .isEqualTo(ReActExecutor.approvalKey(TOOL, argsAReordered));
+        stubActionArgs(List.of(argsA, argsAReordered));
+
+        ReActResult result = executor(registryRequiringApproval()).execute(STEP,
+                new SimplePerception("u1", "s1", "问"), null, 8, () -> { },
+                governance(Map.of(ReActExecutor.approvalKey(TOOL, argsA), true)));
+
+        assertThat(result.done()).isTrue();
+        long toolRuns = result.trace().stream()
+                .filter(t -> t.observation() != null && t.observation().startsWith("[obs]"))
+                .count();
+        assertThat(toolRuns).as("同参两次调用均应放行").isEqualTo(2);
+    }
+
+    /** #18 无参（null/空白）与非法 args 统一指纹 sha256("{}")。 */
+    @Test
+    void emptyOrUnparseableArgsFallsBackToEmptyObjectFingerprint() {
+        assertThat(ReActExecutor.approvalKey(TOOL, null))
+                .isEqualTo(ReActExecutor.approvalKey(TOOL, ""))
+                .isEqualTo(ReActExecutor.approvalKey(TOOL, "not-a-json"))
+                .isEqualTo(ReActExecutor.approvalKey(TOOL, "{}"));
+    }
+
+    /** LLM stub：依次输出给定 args 的 ACTION，序列耗尽后恒 FINAL。 */
+    private void stubActionArgs(List<String> actionArgs) {
+        ObjectMapper om = new ObjectMapper();
+        AtomicInteger idx = new AtomicInteger();
+        when(chatModel.call(any(Prompt.class))).thenAnswer(inv -> {
+            int i = idx.getAndIncrement();
+            if (i < actionArgs.size()) {
+                var action = om.createObjectNode().put("name", TOOL).put("args", actionArgs.get(i));
+                return resp(om.createObjectNode().put("thought", "检索")
+                        .set("action", action).putNull("finalAnswer").toString());
+            }
+            return resp("{\"thought\":\"结束\",\"action\":null,\"finalAnswer\":\"答案\"}");
+        });
     }
 
     @Test

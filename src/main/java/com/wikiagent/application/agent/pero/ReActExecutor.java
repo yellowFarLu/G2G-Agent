@@ -14,6 +14,9 @@ import com.wikiagent.domain.task.TaskBudget;
 import com.wikiagent.domain.tool.ToolCaller;
 import com.wikiagent.infrastructure.trace.AuditLogRepository;
 import com.wikiagent.service.agent.JsonExtractor;
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.SerializationFeature;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.messages.SystemMessage;
@@ -26,6 +29,9 @@ import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -176,11 +182,11 @@ public class ReActExecutor {
                 // F3：高危工具人工批准门（TOOL_APPROVAL）。未决 → 抛人工接管（worker 建单 +
                 // WAITING_HUMAN，resolve 后续跑时决策经 approvalDecisions 回传）；
                 // 批准 → 放行执行；驳回 → 跳过该工具，observation 标记 TOOL_REJECTED_BY_USER
-                Boolean approval = approvalDecisionOf(action.name(), governance);
+                Boolean approval = approvalDecisionOf(action, governance);
                 if (approval == null) {
                     throw new HumanRequiredException(HumanTaskKind.TOOL_APPROVAL, "工具批准",
                             "高危工具 " + action.name() + " 需人工批准后执行",
-                            buildApprovalFormSchema(action.name()));
+                            buildApprovalFormSchema(action.name(), action.args()));
                 }
                 if (!approval) {
                     observation = "TOOL_REJECTED_BY_USER";
@@ -364,23 +370,78 @@ public class ReActExecutor {
     static final int COMPACT_KEEP_RECENT = 5;
 
     /**
-     * F3：高危工具批准门。
+     * F3/#18 高危工具批准门（决策键含 args 指纹）。
      *
-     * @return TRUE=放行（不需批准或已批准）；FALSE=已驳回（跳过执行）；null=需批准但未决（抛人工接管）
+     * @return TRUE=放行（不需批准或已批准该工具+该组参数）；FALSE=已驳回（跳过执行）；
+     *         null=需批准但未决（抛人工接管）
      */
-    private Boolean approvalDecisionOf(String toolName, ReActGovernance governance) {
+    private Boolean approvalDecisionOf(ReActAction action, ReActGovernance governance) {
         if (permissionRegistry == null || governance == null
-                || !permissionRegistry.requiresApproval(toolName)) {
+                || !permissionRegistry.requiresApproval(action.name())) {
             return Boolean.TRUE;
         }
         Map<String, Boolean> decisions = governance.approvalDecisions();
-        return decisions == null ? null : decisions.get(toolName);
+        if (decisions == null || decisions.isEmpty()) {
+            return null;
+        }
+        Boolean decision = decisions.get(approvalKey(action.name(), action.args()));
+        if (decision != null) {
+            return decision;
+        }
+        // 兼容旧人工任务（无 args 指纹，决策 map 以纯 toolName 为键）
+        return decisions.get(action.name());
     }
 
-    /** F3：TOOL_APPROVAL 表单 schema。toolName 供 worker/任务处理器回读决策归属键。 */
-    private static com.fasterxml.jackson.databind.JsonNode buildApprovalFormSchema(String toolName) {
+    /**
+     * #18 批准归属键 = {@code toolName + ":" + sha256(规范化 args JSON)}。
+     * 规范化：解析 args 后按键排序重序列化（消除键序/空白差异）；空白或解析失败
+     * 一律规范化为 {@code {}}，故无参工具指纹 = sha256("{}")。
+     */
+    static String approvalKey(String toolName, String args) {
+        return toolName + ":" + argsFingerprint(args);
+    }
+
+    /** #18 args 指纹（小写 HEX SHA-256，规范化 JSON）。package-private 供测试复用。 */
+    static String argsFingerprint(String args) {
+        String normalized;
+        if (args == null || args.isBlank()) {
+            normalized = "{}";
+        } else {
+            try {
+                Map<String, Object> parsed = APPROVAL_KEY_MAPPER.readValue(
+                        args, new TypeReference<Map<String, Object>>() {});
+                normalized = APPROVAL_KEY_MAPPER.writeValueAsString(
+                        parsed == null ? Map.of() : parsed);
+            } catch (Exception e) {
+                normalized = "{}";
+            }
+        }
+        return sha256Hex(normalized);
+    }
+
+    private static final ObjectMapper APPROVAL_KEY_MAPPER = new ObjectMapper()
+            .configure(SerializationFeature.ORDER_MAP_ENTRIES_BY_KEYS, true);
+
+    private static String sha256Hex(String s) {
+        try {
+            byte[] digest = MessageDigest.getInstance("SHA-256")
+                    .digest(s.getBytes(StandardCharsets.UTF_8));
+            StringBuilder hex = new StringBuilder(64);
+            for (byte b : digest) {
+                hex.append(String.format("%02x", b));
+            }
+            return hex.toString();
+        } catch (NoSuchAlgorithmException e) {
+            throw new IllegalStateException("SHA-256 不可用", e);
+        }
+    }
+
+    /** F3/#18 TOOL_APPROVAL 表单 schema：toolName+argsFingerprint 供 worker/任务处理器回读复合键。 */
+    private static com.fasterxml.jackson.databind.JsonNode buildApprovalFormSchema(
+            String toolName, String args) {
         var schema = new com.fasterxml.jackson.databind.ObjectMapper().createObjectNode();
         schema.put("toolName", toolName);
+        schema.put("argsFingerprint", argsFingerprint(args));
         schema.put("approve", "boolean(true=批准执行 / false=驳回跳过)");
         return schema;
     }

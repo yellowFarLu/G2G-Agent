@@ -243,9 +243,11 @@ public class AgentTaskHandler implements TaskHandler {
     }
 
     /**
-     * F3：从 RESOLVED TOOL_APPROVAL 人工任务读回批准/驳回决策（toolName → approve）。
-     * 决策归属键取人工任务 formSchema.toolName（抛出时写入），值取 formValue.approve；
-     * 同一工具多单时后处置的覆盖先前的。
+     * F3/#18：从 RESOLVED TOOL_APPROVAL 人工任务读回批准/驳回决策。
+     * 决策归属键：formSchema 含 argsFingerprint 时组复合键
+     * {@code toolName + ":" + argsFingerprint}（批准只对该组参数生效，换参数需重新批准）；
+     * 旧人工任务无 argsFingerprint 时回退纯 toolName 键（执行器侧同样保留旧键回退）。
+     * 值取 formValue.approve；同一键多单时后处置的覆盖先前的。
      */
     private Map<String, Boolean> approvalDecisionsOf(TaskExecutionContext ctx) {
         if (humanRepo == null) {
@@ -260,8 +262,15 @@ public class AgentTaskHandler implements TaskHandler {
                         || ht.formValue() == null) {
                     continue;
                 }
-                decisions.put(ht.formSchema().get("toolName").asText(),
-                        ht.formValue().path("approve").asBoolean(false));
+                String toolName = ht.formSchema().get("toolName").asText();
+                boolean approve = ht.formValue().path("approve").asBoolean(false);
+                if (ht.formSchema().hasNonNull("argsFingerprint")) {
+                    decisions.put(toolName + ":" + ht.formSchema().get("argsFingerprint").asText(),
+                            approve);
+                } else {
+                    // 兼容旧记录：无 args 指纹，以纯 toolName 为键
+                    decisions.put(toolName, approve);
+                }
             }
         } catch (Exception e) {
             // 决策读取失败不阻断执行：审批门按未决处理（保守抛人工）

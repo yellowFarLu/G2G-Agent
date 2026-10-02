@@ -117,6 +117,10 @@ class AgentApprovalIntegrationTest {
         HumanTask ht = hts.stream().filter(h -> h.kind() == HumanTaskKind.TOOL_APPROVAL)
                 .findFirst().orElseThrow();
         assertThat(ht.formSchema().get("toolName").asText()).isEqualTo("update_user_profile");
+        // #18 端到端：抛出→建单持久化的 formSchema 必须带 args 指纹（args="{}"，sha256 64 位 HEX）
+        assertThat(ht.formSchema().get("argsFingerprint").asText())
+                .matches("[0-9a-f]{64}")
+                .isEqualTo(sha256Hex("{}"));
 
         long htId = ht.id();
         mvc.perform(post("/api/human-tasks/" + htId + "/resolve").header("X-User-Id", "ops-1")
@@ -194,6 +198,21 @@ class AgentApprovalIntegrationTest {
 
     private static String uid() {
         return UUID.randomUUID().toString().replace("-", "").substring(0, 8);
+    }
+
+    /** #18 测试本地计算 sha256 HEX（与 ReActExecutor 指纹算法一致）。 */
+    private static String sha256Hex(String s) {
+        try {
+            byte[] digest = java.security.MessageDigest.getInstance("SHA-256")
+                    .digest(s.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            StringBuilder hex = new StringBuilder(64);
+            for (byte b : digest) {
+                hex.append(String.format("%02x", b));
+            }
+            return hex.toString();
+        } catch (java.security.NoSuchAlgorithmException e) {
+            throw new IllegalStateException(e);
+        }
     }
 
     private static ChatResponse chatResponse(String text) {
