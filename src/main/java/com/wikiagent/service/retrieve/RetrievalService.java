@@ -4,9 +4,14 @@ import com.wikiagent.config.WikiAgentProperties;
 import com.wikiagent.domain.llm.spi.RerankProvider;
 import com.wikiagent.domain.llm.spi.RerankRequest;
 import com.wikiagent.domain.llm.spi.RerankResult;
+import com.wikiagent.domain.retrieve.RetrievalFilter;
+import com.wikiagent.domain.retrieve.RetrievalQuery;
+import com.wikiagent.domain.retrieve.RetrievalSecurityContext;
 import com.wikiagent.entity.KbChildChunk;
 import com.wikiagent.entity.KbDocument;
 import com.wikiagent.entity.KbParentChunk;
+import com.wikiagent.infrastructure.persistence.KnowledgeMetadataEntity;
+import com.wikiagent.infrastructure.persistence.KnowledgeMetadataJpaDao;
 import com.wikiagent.infrastructure.persistence.MetricEventEntity;
 import com.wikiagent.infrastructure.persistence.MetricEventJpaDao;
 import com.wikiagent.repo.KbChildChunkRepo;
@@ -74,22 +79,29 @@ public class RetrievalService {
     private final MetricEventJpaDao metricEventDao;
     /** E2：可选 rerank provider（不可用时为 null，检索按原序返回）。 */
     private final RerankProvider rerankProvider;
+    /** E5：知识元数据 DAO（可选，权限过滤用；缺失时不过滤）。 */
+    private final KnowledgeMetadataJpaDao metadataDao;
+    /** E5：是否把权限表达式下推 Milvus（存量集合缺标量列时须保持 false）。 */
+    private final boolean milvusFilterMetadata;
 
     /** Milvus 不可用截止时间戳；0 表示正常，>now 表示冷却降级中。 */
     private volatile long milvusDisabledUntil = 0L;
 
-    /** 兼容旧构造（测试/旧装配）：无 rerank provider。 */
+    /** 兼容旧构造（测试/旧装配）：无 rerank provider、无权限过滤。 */
     public RetrievalService(WikiAgentProperties props, MilvusStoreService milvus, EmbeddingModel embeddingModel,
                             KbParentChunkRepo parentRepo, KbDocumentRepo docRepo, KbChildChunkRepo childRepo,
                             MetricEventJpaDao metricEventDao) {
-        this(props, milvus, embeddingModel, parentRepo, docRepo, childRepo, metricEventDao, null);
+        this(props, milvus, embeddingModel, parentRepo, docRepo, childRepo, metricEventDao, null, null, false);
     }
 
     @org.springframework.beans.factory.annotation.Autowired
     public RetrievalService(WikiAgentProperties props, MilvusStoreService milvus, EmbeddingModel embeddingModel,
                             KbParentChunkRepo parentRepo, KbDocumentRepo docRepo, KbChildChunkRepo childRepo,
                             MetricEventJpaDao metricEventDao,
-                            org.springframework.beans.factory.ObjectProvider<RerankProvider> rerankProvider) {
+                            org.springframework.beans.factory.ObjectProvider<RerankProvider> rerankProvider,
+                            org.springframework.beans.factory.ObjectProvider<KnowledgeMetadataJpaDao> metadataDao,
+                            @org.springframework.beans.factory.annotation.Value(
+                                    "${wikiagent.milvus.filter-metadata:false}") boolean milvusFilterMetadata) {
         this.props = props;
         this.milvus = milvus;
         this.embeddingModel = embeddingModel;
@@ -99,6 +111,8 @@ public class RetrievalService {
         this.metricEventDao = metricEventDao;
         RerankProvider rp = rerankProvider == null ? null : rerankProvider.getIfAvailable();
         this.rerankProvider = rp != null && rp.available() ? rp : null;
+        this.metadataDao = metadataDao == null ? null : metadataDao.getIfAvailable();
+        this.milvusFilterMetadata = milvusFilterMetadata;
     }
 
     /** 单次多查询检索（一次组装，rerank 可用时重排）。 */
@@ -113,6 +127,24 @@ public class RetrievalService {
     /** 单查询单次检索（兼容旧链路）。 */
     public RetrievalResult retrieve(String query) {
         return retrieve(List.of(query));
+    }
+
+    /**
+     * E5：带权限表达式的单查询检索。filterExpression 与当前请求身份
+     * （X-Business-Identity → RetrievalSecurityContext）合并（AND）后生效。
+     */
+    public RetrievalResult retrieve(RetrievalQuery rq) {
+        RetrievalFilter filter = effectiveFilter(rq == null ? null : rq.filterExpression());
+        Accumulator acc = search(new Accumulator(),
+                rq == null ? List.of() : List.of(rq.query()), filter);
+        RetrievalResult result = assemble(acc, rq == null ? null : rq.query());
+        recordRetrievalMetrics(result);
+        return result;
+    }
+
+    /** 合并显式表达式与当前身份过滤。 */
+    private RetrievalFilter effectiveFilter(String filterExpression) {
+        return RetrievalFilter.parse(filterExpression).and(RetrievalSecurityContext.identityFilter());
     }
 
     private static String firstNonBlank(List<String> queries) {
@@ -161,25 +193,39 @@ public class RetrievalService {
     /**
      * 执行一轮多查询混合检索并累积进 acc（空查询被忽略）。
      * 同一父块跨轮/跨查询只保留最高分与首次命中顺序。
+     * 自动叠加当前请求身份过滤（RetrievalSecurityContext）。
      */
     public Accumulator search(Accumulator acc, List<String> queries) {
+        return search(acc, queries, effectiveFilter(null));
+    }
+
+    /**
+     * E5：带权限过滤的多查询检索。关系库侧按 knowledge_metadata 行做权威过滤
+     * （未打标 chunk 默认放行）；wikiagent.milvus.filter-metadata=true 且集合含
+     * 标量列时同时下推 Milvus 表达式。
+     */
+    public Accumulator search(Accumulator acc, List<String> queries, RetrievalFilter filter) {
         if (acc == null || queries == null) {
             return acc;
         }
+        RetrievalFilter effective = filter == null ? RetrievalFilter.none() : filter;
+        String pushdownExpr = milvusFilterMetadata && !effective.isEmpty() ? effective.toMilvusExpr() : null;
         boolean fallback = System.currentTimeMillis() < milvusDisabledUntil;
         for (String q : queries) {
             if (q == null || q.isBlank()) {
                 continue;
             }
             if (fallback) {
-                localKeywordSearch(acc, q);
+                localKeywordSearch(acc, q, effective);
                 continue;
             }
             try {
                 float[] qvec = embeddingModel.embed(q);
                 List<MilvusStoreService.Hit> hits = milvus.hybridSearch(
                         qvec, q,
-                        props.retrieve().subTopk(), props.retrieve().finalTopk(), props.retrieve().rrfK());
+                        props.retrieve().subTopk(), props.retrieve().finalTopk(), props.retrieve().rrfK(),
+                        pushdownExpr);
+                hits = filterHitsByMetadata(hits, effective);
                 for (MilvusStoreService.Hit h : hits) {
                     acc.parentOrder.add(h.parentId());
                     acc.bestScore.merge(h.parentId(), h.score(), Math::max);
@@ -190,10 +236,48 @@ public class RetrievalService {
                 log.warn("Milvus 混合检索失败，降级为本地关键词检索: {}", e.getMessage());
                 milvusDisabledUntil = System.currentTimeMillis() + FALLBACK_COOLDOWN_MS;
                 fallback = true;
-                localKeywordSearch(acc, q);
+                localKeywordSearch(acc, q, effective);
             }
         }
         return acc;
+    }
+
+    /** E5：按 knowledge_metadata 行过滤 Milvus 命中（childId → 元数据）。不过滤/无 DAO 时原样返回。 */
+    private List<MilvusStoreService.Hit> filterHitsByMetadata(List<MilvusStoreService.Hit> hits,
+                                                              RetrievalFilter filter) {
+        if (filter.isEmpty() || metadataDao == null || hits == null || hits.isEmpty()) {
+            return hits;
+        }
+        try {
+            Map<String, KnowledgeMetadataEntity> meta = loadMetadata(
+                    hits.stream().map(MilvusStoreService.Hit::childId).toList());
+            List<MilvusStoreService.Hit> out = new ArrayList<>(hits.size());
+            for (MilvusStoreService.Hit h : hits) {
+                if (allowed(meta.get(h.childId()), filter)) {
+                    out.add(h);
+                }
+            }
+            return out;
+        } catch (Exception e) {
+            log.warn("检索权限过滤失败（保守放行原结果）: {}", e.getMessage());
+            return hits;
+        }
+    }
+
+    private Map<String, KnowledgeMetadataEntity> loadMetadata(List<String> chunkIds) {
+        Map<String, KnowledgeMetadataEntity> map = new HashMap<>();
+        for (KnowledgeMetadataEntity e : metadataDao.findByChunkIdIn(chunkIds)) {
+            map.put(e.getChunkId(), e);
+        }
+        return map;
+    }
+
+    /** 元数据行是否满足过滤；未打标（无行）默认放行。 */
+    private boolean allowed(KnowledgeMetadataEntity meta, RetrievalFilter filter) {
+        if (meta == null) {
+            return true;
+        }
+        return filter.matches(meta.getDomainTag(), meta.getSubDomainTag(), meta.getRequiredIdentity());
     }
 
     /**
@@ -205,6 +289,10 @@ public class RetrievalService {
      * 仅保证"无外部依赖可用 + 能命中字面重合知识"，不声称等价。
      */
     private void localKeywordSearch(Accumulator acc, String query) {
+        localKeywordSearch(acc, query, RetrievalFilter.none());
+    }
+
+    private void localKeywordSearch(Accumulator acc, String query, RetrievalFilter filter) {
         List<String> terms = extractTerms(query);
         if (terms.isEmpty()) {
             return;
@@ -222,6 +310,16 @@ public class RetrievalService {
             }
             for (KbChildChunk c : rows) {
                 chunkTerms.merge(c, 1, Integer::sum);
+            }
+        }
+        // E5：权限过滤（按子块元数据）
+        if (!filter.isEmpty() && metadataDao != null && !chunkTerms.isEmpty()) {
+            try {
+                Map<String, KnowledgeMetadataEntity> meta = loadMetadata(
+                        chunkTerms.keySet().stream().map(KbChildChunk::getId).toList());
+                chunkTerms.keySet().removeIf(c -> !allowed(meta.get(c.getId()), filter));
+            } catch (Exception e) {
+                log.warn("本地检索权限过滤失败（保守放行）: {}", e.getMessage());
             }
         }
         chunkTerms.entrySet().stream()

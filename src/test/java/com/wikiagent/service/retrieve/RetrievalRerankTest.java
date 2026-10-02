@@ -5,6 +5,7 @@ import com.wikiagent.domain.llm.spi.RerankRequest;
 import com.wikiagent.domain.llm.spi.RerankResult;
 import com.wikiagent.config.WikiAgentProperties;
 import com.wikiagent.entity.KbParentChunk;
+import com.wikiagent.infrastructure.persistence.KnowledgeMetadataJpaDao;
 import com.wikiagent.infrastructure.persistence.MetricEventJpaDao;
 import com.wikiagent.repo.KbChildChunkRepo;
 import com.wikiagent.repo.KbDocumentRepo;
@@ -28,11 +29,13 @@ class RetrievalRerankTest {
     private RetrievalService service(RerankProvider provider, KbParentChunkRepo parentRepo) {
         ObjectProvider<RerankProvider> op = mock(ObjectProvider.class);
         when(op.getIfAvailable()).thenReturn(provider);
+        ObjectProvider<KnowledgeMetadataJpaDao> metaOp = mock(ObjectProvider.class);
+        when(metaOp.getIfAvailable()).thenReturn(null);
         WikiAgentProperties props = new WikiAgentProperties(null,
                 new WikiAgentProperties.Retrieve(20, 10, 60, 12000), null, null);
         return new RetrievalService(props, mock(MilvusStoreService.class), mock(EmbeddingModel.class),
                 parentRepo, mock(KbDocumentRepo.class), mock(KbChildChunkRepo.class),
-                mock(MetricEventJpaDao.class), op);
+                mock(MetricEventJpaDao.class), op, metaOp, false);
     }
 
     private static KbParentChunk parent(String id, String docId, String content) {

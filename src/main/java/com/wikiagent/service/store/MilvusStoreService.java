@@ -129,6 +129,13 @@ public class MilvusStoreService {
                 .fieldName("is_active").dataType(DataType.Bool).build());
         schema.addField(AddFieldReq.builder()
                 .fieldName("page_no").dataType(DataType.Int32).build());
+        // E5：权限标量字段（用于 filter 下推）
+        schema.addField(AddFieldReq.builder()
+                .fieldName("domain_tag").dataType(DataType.VarChar).maxLength(64).isNullable(true).build());
+        schema.addField(AddFieldReq.builder()
+                .fieldName("sub_domain_tag").dataType(DataType.VarChar).maxLength(64).isNullable(true).build());
+        schema.addField(AddFieldReq.builder()
+                .fieldName("required_identity").dataType(DataType.VarChar).maxLength(64).isNullable(true).build());
 
         schema.addFunction(CreateCollectionReq.Function.builder()
                 .functionType(FunctionType.BM25)
@@ -201,11 +208,26 @@ public class MilvusStoreService {
      */
     public List<Hit> hybridSearch(float[] queryEmbedding, String rewrittenQuery,
                                   int subTopk, int finalTopk, int rrfK) {
+        return hybridSearch(queryEmbedding, rewrittenQuery, subTopk, finalTopk, rrfK, null);
+    }
+
+    /**
+     * E5 带权限表达式下推的混合检索：extraExpr（如 domain_tag/required_identity 标量过滤）
+     * 与 is_active 条件 AND 合并后下推。
+     * <p>
+     * 注意：下推要求 collection 建表时含相应标量字段；存量集合缺列时表达式会报错，
+     * 由调用方捕获并走关系库侧过滤兜底（wikiagent.milvus.filter-metadata 默认 false 不下推）。
+     */
+    public List<Hit> hybridSearch(float[] queryEmbedding, String rewrittenQuery,
+                                  int subTopk, int finalTopk, int rrfK, String extraExpr) {
         ensureCollection();
         List<BaseVector> denseVecs = List.of(new FloatVec(queryEmbedding));
         List<BaseVector> sparseVecs = List.of(new EmbeddedText(rewrittenQuery));
 
         String activeExpr = filterActive ? "is_active == true" : null;
+        if (extraExpr != null && !extraExpr.isBlank()) {
+            activeExpr = activeExpr == null ? extraExpr : activeExpr + " and (" + extraExpr + ")";
+        }
         AnnSearchReq.AnnSearchReqBuilder denseB = AnnSearchReq.builder()
                 .vectorFieldName("dense")
                 .vectors(denseVecs)
