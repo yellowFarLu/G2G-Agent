@@ -101,22 +101,22 @@
 ## 波次 3：I 可观测韧性 + J 运维安全 + H 评测体系
 
 ### I（AC-I1..I4）
-- [ ] I1 traceId MDC 贯穿（chat/retrieval/model/tool/task），model_call_log/agent_trace/task_event 关联
-- [ ] I2 Micrometer 指标：任务积压、延迟直方图、错误率、模型失败、费用、DB 池、第三方健康/熔断（wikiagent_* 命名）
-- [ ] I3 令牌桶限流（用户/租户，429+审计）；队列背压联动 tenant-max-concurrent；统一熔断器注册表
-- [ ] I4 降级矩阵文档（Milvus/Redis/RocketMQ/LLM/Provider）+ 逐项行为测试
+- [x] I1 traceId MDC 贯穿（chat/retrieval/model/tool/task），model_call_log/agent_trace/task_event 关联
+- [x] I2 Micrometer 指标：任务积压、延迟直方图、错误率、模型失败、费用、DB 池、第三方健康/熔断（wikiagent_* 命名）
+- [x] I3 令牌桶限流（用户/租户，429+审计）；队列背压联动 tenant-max-concurrent；统一熔断器注册表
+- [x] I4 降级矩阵文档（Milvus/Redis/RocketMQ/LLM/Provider）+ 逐项行为测试
 
 ### J（AC-J1..J4）
-- [ ] J1 dev/staging/prod profiles（prod 安全默认）；CI 增加 package/image/deploy workflow（prod manual gate）
-- [ ] J2 功能开关登记表 + /actuator/env 可见说明；备份回滚手册（MySQL/Flyway/Milvus/Redis）
-- [ ] J3 输出流式网关（SSE 完成前校验，复用 GuardrailDetector）；输入网关回归
-- [ ] J4 注入/越权/工具误调用三类攻击回归用例；PII 最小化外发断言；X-User-Id 信任边界文档+开发态共享密钥可选过滤器；租户隔离测试
+- [x] J1 dev/staging/prod profiles（prod 安全默认）；CI 增加 package/image/deploy workflow（prod manual gate）
+- [x] J2 功能开关登记表 + /actuator/env 可见说明；备份回滚手册（MySQL/Flyway/Milvus/Redis）
+- [x] J3 输出流式网关（SSE 完成前校验，复用 GuardrailDetector）；输入网关回归
+- [x] J4 注入/越权/工具误调用三类攻击回归用例；PII 最小化外发断言；X-User-Id 信任边界文档+开发态共享密钥可选过滤器；租户隔离测试
 
 ### H（AC-H1..H4）
-- [ ] H1 黄金样本集：parse / retrieve / rule / anomaly 四类各 ≥5（resources/eval）
-- [ ] H2 离线评测运行器：`-Peval` profile + 录制固件（无 key 可跑）；LiveLLM tag 夜间手动
-- [ ] H3 七项指标计算器（造数单测）+ EvalReport JSON + 查询 API
-- [ ] H4 失败分类法与回归基线文档；CI 加 eval 校验 job
+- [x] H1 黄金样本集：parse / retrieve / rule / anomaly 四类各 ≥5（resources/eval）
+- [x] H2 离线评测运行器：`-Peval` profile + 录制固件（无 key 可跑）；LiveLLM tag 夜间手动
+- [x] H3 七项指标计算器（造数单测）+ EvalReport JSON + 查询 API
+- [x] H4 失败分类法与回归基线文档；CI 加 eval 校验 job
 
 ### 波 3 闸门
 全量测试 + eval 报告 → fresh review → 修订 → 提交
