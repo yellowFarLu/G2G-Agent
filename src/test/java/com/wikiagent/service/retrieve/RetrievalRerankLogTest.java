@@ -64,7 +64,7 @@ class RetrievalRerankLogTest {
                 new WikiAgentProperties.Retrieve(20, 10, 60, 12000), null, null);
         return new RetrievalService(props, mock(MilvusStoreService.class), mock(EmbeddingModel.class),
                 parentRepo, mock(KbDocumentRepo.class), mock(KbChildChunkRepo.class),
-                mock(MetricEventJpaDao.class), rerankOp, metaOp, false, recorderOp);
+                mock(MetricEventJpaDao.class), rerankOp, metaOp, false, recorderOp, null);
     }
 
     private KbParentChunkRepo twoParents() {

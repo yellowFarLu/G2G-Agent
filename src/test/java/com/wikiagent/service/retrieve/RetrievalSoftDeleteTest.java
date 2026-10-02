@@ -88,7 +88,7 @@ class RetrievalSoftDeleteTest {
         return new RetrievalService(props, milvus, embeddingModel, parentRepo, docRepo, childRepo,
                 mock(MetricEventJpaDao.class),
                 provider((RerankProvider) null), provider(metadataDao), false,
-                provider((ModelCallRecorder) null));
+                provider((ModelCallRecorder) null), null);
     }
 
     @Test

@@ -59,7 +59,22 @@
 | `MYSQL_USER` | 数据库用户名 | — |
 | `MYSQL_PASSWORD` | 数据库密码 | — |
 
-## 六、/actuator/env 可见性
+## 六、灰度发布（需求10/15）
+
+灰度决策服务 `GrayReleaseService`：按 `wikiagent.gray.features.<特性名>` 规则对当前请求身份
+（RetrievalSecurityContext，无身份归入 anonymous 桶）做稳定哈希分桶放量。
+
+| 配置键 | 默认 | 说明 |
+|---|---|---|
+| `wikiagent.gray.features.<name>.percent` | 特性未配置=不门控 | 放量百分比 0-100（SHA-256 分桶，重启/扩缩容不漂移） |
+| `wikiagent.gray.features.<name>.allowlist` | 空 | 恒命中（优先于 percent） |
+| `wikiagent.gray.features.<name>.denylist` | 空 | 恒拒绝（优先于白名单） |
+
+当前决策点：`rerank`（检索重排）。每次决策打点 `wikiagent.gray.decision{feature,result,reason}`，
+决策原因（NOT_CONFIGURED/DENYLIST/ALLOWLIST/PERCENT_0/PERCENT_100/BUCKET_n）见 debug 日志。
+扩量操作：调大 percent 并观察指标；回滚：percent 调 0 或加 denylist，即时生效无需重启之外的动作（改配置需重启或配置中心刷新）。
+
+## 七、/actuator/env 可见性
 
 全部开关均通过 Spring Boot `@ConfigurationProperties` 绑定，
 `/actuator/env` 在 `management.endpoints.web.exposure.include` 包含 `env` 时可见当前生效值。

@@ -74,7 +74,7 @@ class RetrievalSourceFieldsTest {
                 new WikiAgentProperties.Retrieve(20, 10, 60, 12000), null, null);
         return new RetrievalService(props, milvus, embeddingModel, parentRepo, docRepo, childRepo,
                 mock(MetricEventJpaDao.class),
-                provider(null), metadataDao, false, provider(null));
+                provider(null), metadataDao, false, provider(null), null);
     }
 
     private static <T> ObjectProvider<T> provider(T bean) {

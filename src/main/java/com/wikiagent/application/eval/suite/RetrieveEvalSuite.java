@@ -80,7 +80,9 @@ public class RetrieveEvalSuite {
                 new InstanceObjectProvider<RerankProvider>(null),
                 new InstanceObjectProvider<>(metadataDao),
                 false,
-                new InstanceObjectProvider<ModelCallRecorder>(null));
+                // 评测不接灰度门控（保持评测确定性，全量口径）
+                new InstanceObjectProvider<ModelCallRecorder>(null),
+                null);
     }
 
     private SampleResult runOne(RetrievalService service, RetrieveGoldenCase c,

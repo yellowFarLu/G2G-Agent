@@ -104,4 +104,39 @@ class RetrievalRerankTest {
         RetrievalService.RetrievalResult result = svc.assemble(acc, "查询");
         assertEquals("d1", result.sources().get(0).docId());
     }
+
+    @Test
+    void 灰度未命中时跳过rerank保持原序() {
+        KbParentChunkRepo parentRepo = mock(KbParentChunkRepo.class);
+        when(parentRepo.findAllById(any())).thenReturn(List.of(
+                parent("p1", "d1", "内容甲"), parent("p2", "d2", "内容乙")));
+        RerankProvider rerank = mock(RerankProvider.class);
+        when(rerank.available()).thenReturn(true);
+        when(rerank.name()).thenReturn("fake");
+        // 灰度规则：rerank percent=0（全拒）→ provider 可用也不应被调用
+        com.wikiagent.config.GrayReleaseProperties grayProps = new com.wikiagent.config.GrayReleaseProperties();
+        com.wikiagent.config.GrayReleaseProperties.Rule rule = new com.wikiagent.config.GrayReleaseProperties.Rule();
+        rule.setPercent(0);
+        grayProps.getFeatures().put("rerank", rule);
+        ObjectProvider<com.wikiagent.application.gray.GrayReleaseService> grayOp = mock(ObjectProvider.class);
+        when(grayOp.getIfAvailable())
+                .thenReturn(new com.wikiagent.application.gray.GrayReleaseService(grayProps, null));
+        ObjectProvider<RerankProvider> op = mock(ObjectProvider.class);
+        when(op.getIfAvailable()).thenReturn(rerank);
+        ObjectProvider<KnowledgeMetadataJpaDao> metaOp = mock(ObjectProvider.class);
+        when(metaOp.getIfAvailable()).thenReturn(null);
+        WikiAgentProperties props = new WikiAgentProperties(null,
+                new WikiAgentProperties.Retrieve(20, 10, 60, 12000), null, null);
+        RetrievalService svc = new RetrievalService(props, mock(MilvusStoreService.class),
+                mock(EmbeddingModel.class), parentRepo, mock(KbDocumentRepo.class),
+                mock(KbChildChunkRepo.class), mock(MetricEventJpaDao.class), op, metaOp, false, null, grayOp);
+
+        RetrievalService.Accumulator acc = svc.newAccumulator();
+        acc.put("p1", "d1", 0.5);
+        acc.put("p2", "d2", 0.5);
+
+        RetrievalService.RetrievalResult result = svc.assemble(acc, "查询");
+        assertEquals("d1", result.sources().get(0).docId());
+        verify(rerank, never()).rerank(any());
+    }
 }

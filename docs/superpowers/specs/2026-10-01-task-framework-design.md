@@ -415,3 +415,5 @@ CI 用 Testcontainers 起 MySQL/Redis/RocketMQ；本地无 Docker 时 `-Dtest.pr
 - 不做 Agent 费用上限、工具动态授权（F；A 仅提供步骤级暂停/取消/接管底座）；
 - 不做 React 前端（G）；A 保证现有原生页面的上传链路切换为异步轮询/SSE 不破，新 API 供 G 使用；
 - 不做跨用户限流、成本看板、CI/CD、灰度开关平台（I/J；仅预留配置位与事件数据）。
+  注：灰度能力后续以 `GrayReleaseService`（wikiagent.gray.features.*，稳定哈希分桶+名单）落地，
+  首个决策点 rerank，见 docs/operations/feature-toggles.md §六。

@@ -316,6 +316,12 @@ wikiagent:
     enabled: ${WIKIAGENT_RERANK_ENABLED:true}
     model: gte-rerank
     base-url: ${WIKIAGENT_RERANK_BASE_URL:https://dashscope.aliyuncs.com/api/v1/services/rerank/text-rerank/text-rerank}
+  # 灰度发布（需求10/15）：按身份稳定哈希分桶放量；未配置的特性不门控（全量放开）。
+  # 灰度键为当前请求身份（RetrievalSecurityContext），无身份归入 anonymous 桶。
+  # 放量示例：features.rerank.percent=10 即 rerank 对 10% 身份放量；
+  # allowlist 恒命中 / denylist 恒拒绝（优先级高于 percent）。
+  gray:
+    features: {}
   cache:
     embedding:
       enabled: ${WIKIAGENT_CACHE_EMBEDDING_ENABLED:true}

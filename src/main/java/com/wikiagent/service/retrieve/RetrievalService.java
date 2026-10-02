@@ -1,5 +1,6 @@
 package com.wikiagent.service.retrieve;
 
+import com.wikiagent.application.gray.GrayReleaseService;
 import com.wikiagent.application.llm.ModelCallRecorder;
 import com.wikiagent.config.WikiAgentProperties;
 import com.wikiagent.domain.llm.ModelCallLogPurpose;
@@ -123,6 +124,10 @@ public class RetrievalService {
     private final boolean milvusFilterMetadata;
     /** E3：RERANK 打点器（可选，缺失时只重排不打点）。 */
     private final ModelCallRecorder callRecorder;
+    /** 灰度发布决策（可选，缺失/未配置规则时不门控）。 */
+    private final GrayReleaseService grayRelease;
+    /** rerank 灰度特性名（wikiagent.gray.features.rerank）。 */
+    private static final String GRAY_FEATURE_RERANK = "rerank";
 
     /** Milvus 不可用截止时间戳；0 表示正常，>now 表示冷却降级中。 */
     private volatile long milvusDisabledUntil = 0L;
@@ -142,13 +147,14 @@ public class RetrievalService {
                             org.springframework.beans.factory.ObjectProvider<KnowledgeMetadataJpaDao> metadataDao,
                             boolean milvusFilterMetadata) {
         this(props, milvus, embeddingModel, parentRepo, docRepo, childRepo, metricEventDao,
-                rerankProvider, metadataDao, milvusFilterMetadata, null);
+                rerankProvider, metadataDao, milvusFilterMetadata, null, null);
     }
 
     /**
      * E2/E3/E5 全量装配构造。
      *
      * @param callRecorder RERANK 打点器（ObjectProvider 可选；无 Bean 时不打点）
+     * @param grayRelease  灰度决策（ObjectProvider 可选；无 Bean 时不门控）
      */
     @org.springframework.beans.factory.annotation.Autowired
     public RetrievalService(WikiAgentProperties props, MilvusStoreService milvus, EmbeddingModel embeddingModel,
@@ -158,7 +164,8 @@ public class RetrievalService {
                             org.springframework.beans.factory.ObjectProvider<KnowledgeMetadataJpaDao> metadataDao,
                             @org.springframework.beans.factory.annotation.Value(
                                     "${wikiagent.milvus.filter-metadata:false}") boolean milvusFilterMetadata,
-                            org.springframework.beans.factory.ObjectProvider<ModelCallRecorder> callRecorder) {
+                            org.springframework.beans.factory.ObjectProvider<ModelCallRecorder> callRecorder,
+                            org.springframework.beans.factory.ObjectProvider<GrayReleaseService> grayRelease) {
         this.props = props;
         this.milvus = milvus;
         this.embeddingModel = embeddingModel;
@@ -171,6 +178,7 @@ public class RetrievalService {
         this.metadataDao = metadataDao == null ? null : metadataDao.getIfAvailable();
         this.milvusFilterMetadata = milvusFilterMetadata;
         this.callRecorder = callRecorder == null ? null : callRecorder.getIfAvailable();
+        this.grayRelease = grayRelease == null ? null : grayRelease.getIfAvailable();
     }
 
     /** 单次多查询检索（一次组装，rerank 可用时重排）。 */
@@ -461,10 +469,14 @@ public class RetrievalService {
      * E2 rerank：可用时对候选父块按 rerank 分数重排 parentOrder。
      * 候选父块内容缺失时跳过；任何异常不阻断，保持原顺序。
      * E3：实际调用 provider 时写 purpose=RERANK 的 model_call_log（成功/失败各一行）；
-     * rerank 未启用/不可用时本方法直接返回——没调就不写日志（诚实打点）。
+     * rerank 未启用/不可用/灰度未命中时本方法直接返回——没调就不写日志（诚实打点）。
+     * 灰度门控（需求10/15）：wikiagent.gray.features.rerank 按当前请求身份分桶放量。
      */
     private void maybeRerank(Accumulator acc, String query) {
         if (rerankProvider == null || query == null || query.isBlank() || acc.parentOrder.size() < 2) {
+            return;
+        }
+        if (!rerankGrayAllowed()) {
             return;
         }
         String provider = "dashscope";
@@ -511,6 +523,17 @@ public class RetrievalService {
             recordRerank(provider, model, System.currentTimeMillis() - started, false);
             log.warn("rerank 失败，保持原序: {}", e.getMessage());
         }
+    }
+
+    /**
+     * rerank 灰度判定：灰度服务缺失（旧构造/单测）不门控；
+     * 灰度键为当前请求身份（RetrievalSecurityContext），无身份归入 anonymous 桶。
+     */
+    private boolean rerankGrayAllowed() {
+        if (grayRelease == null) {
+            return true;
+        }
+        return grayRelease.isEnabled(GRAY_FEATURE_RERANK, RetrievalSecurityContext.currentIdentity());
     }
 
     /** E3：RERANK 打点；callRecorder 缺失（旧装配/单测）时静默跳过。 */
