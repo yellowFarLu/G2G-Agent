@@ -1,6 +1,9 @@
 package com.wikiagent.service.retrieve;
 
 import com.wikiagent.config.WikiAgentProperties;
+import com.wikiagent.domain.llm.spi.RerankProvider;
+import com.wikiagent.domain.llm.spi.RerankRequest;
+import com.wikiagent.domain.llm.spi.RerankResult;
 import com.wikiagent.entity.KbChildChunk;
 import com.wikiagent.entity.KbDocument;
 import com.wikiagent.entity.KbParentChunk;
@@ -53,6 +56,13 @@ public class RetrievalService {
         private final LinkedHashSet<String> parentOrder = new LinkedHashSet<>();
         private final Map<String, Double> bestScore = new HashMap<>();
         private final Map<String, String> parentDoc = new HashMap<>();
+
+        /** 测试辅助：直接放入一条命中（同包可见）。 */
+        void put(String parentId, String docId, double score) {
+            parentOrder.add(parentId);
+            bestScore.merge(parentId, score, Math::max);
+            parentDoc.putIfAbsent(parentId, docId);
+        }
     }
 
     private final WikiAgentProperties props;
@@ -62,13 +72,24 @@ public class RetrievalService {
     private final KbDocumentRepo docRepo;
     private final KbChildChunkRepo childRepo;
     private final MetricEventJpaDao metricEventDao;
+    /** E2：可选 rerank provider（不可用时为 null，检索按原序返回）。 */
+    private final RerankProvider rerankProvider;
 
     /** Milvus 不可用截止时间戳；0 表示正常，>now 表示冷却降级中。 */
     private volatile long milvusDisabledUntil = 0L;
 
+    /** 兼容旧构造（测试/旧装配）：无 rerank provider。 */
     public RetrievalService(WikiAgentProperties props, MilvusStoreService milvus, EmbeddingModel embeddingModel,
                             KbParentChunkRepo parentRepo, KbDocumentRepo docRepo, KbChildChunkRepo childRepo,
                             MetricEventJpaDao metricEventDao) {
+        this(props, milvus, embeddingModel, parentRepo, docRepo, childRepo, metricEventDao, null);
+    }
+
+    @org.springframework.beans.factory.annotation.Autowired
+    public RetrievalService(WikiAgentProperties props, MilvusStoreService milvus, EmbeddingModel embeddingModel,
+                            KbParentChunkRepo parentRepo, KbDocumentRepo docRepo, KbChildChunkRepo childRepo,
+                            MetricEventJpaDao metricEventDao,
+                            org.springframework.beans.factory.ObjectProvider<RerankProvider> rerankProvider) {
         this.props = props;
         this.milvus = milvus;
         this.embeddingModel = embeddingModel;
@@ -76,11 +97,15 @@ public class RetrievalService {
         this.docRepo = docRepo;
         this.childRepo = childRepo;
         this.metricEventDao = metricEventDao;
+        RerankProvider rp = rerankProvider == null ? null : rerankProvider.getIfAvailable();
+        this.rerankProvider = rp != null && rp.available() ? rp : null;
     }
 
-    /** 单次多查询检索（一次组装）。 */
+    /** 单次多查询检索（一次组装，rerank 可用时重排）。 */
     public RetrievalResult retrieve(List<String> queries) {
-        RetrievalResult result = assemble(search(new Accumulator(), queries));
+        Accumulator acc = search(new Accumulator(), queries);
+        String rerankQuery = firstNonBlank(queries);
+        RetrievalResult result = assemble(acc, rerankQuery);
         recordRetrievalMetrics(result);
         return result;
     }
@@ -88,6 +113,14 @@ public class RetrievalService {
     /** 单查询单次检索（兼容旧链路）。 */
     public RetrievalResult retrieve(String query) {
         return retrieve(List.of(query));
+    }
+
+    private static String firstNonBlank(List<String> queries) {
+        if (queries == null) return "";
+        for (String q : queries) {
+            if (q != null && !q.isBlank()) return q;
+        }
+        return "";
     }
 
     /**
@@ -231,11 +264,68 @@ public class RetrievalService {
         return c >= 0x4E00 && c <= 0x9FFF;
     }
 
+    /**
+     * E2 rerank：可用时对候选父块按 rerank 分数重排 parentOrder。
+     * 候选父块内容缺失时跳过；任何异常不阻断，保持原顺序。
+     */
+    private void maybeRerank(Accumulator acc, String query) {
+        if (rerankProvider == null || query == null || query.isBlank() || acc.parentOrder.size() < 2) {
+            return;
+        }
+        try {
+            List<String> parentIds = new ArrayList<>(acc.parentOrder);
+            Map<String, KbParentChunk> parents = new HashMap<>();
+            for (KbParentChunk p : parentRepo.findAllById(parentIds)) {
+                parents.put(p.getId(), p);
+            }
+            List<String> docs = new ArrayList<>(parentIds.size());
+            List<String> validIds = new ArrayList<>(parentIds.size());
+            for (String pid : parentIds) {
+                KbParentChunk p = parents.get(pid);
+                if (p == null) continue;
+                docs.add(p.getContent());
+                validIds.add(pid);
+            }
+            if (docs.size() < 2) {
+                return;
+            }
+            RerankResult rr = rerankProvider.rerank(new RerankRequest(query, docs, docs.size()));
+            if (rr == null || rr.scores() == null || rr.scores().size() != docs.size()) {
+                return;
+            }
+            List<String> reordered = new ArrayList<>(validIds);
+            List<Double> scores = rr.scores();
+            // 按分数降序稳定重排
+            List<Integer> idx = new ArrayList<>(validIds.size());
+            for (int i = 0; i < validIds.size(); i++) idx.add(i);
+            idx.sort((a, b) -> Double.compare(scores.get(b), scores.get(a)));
+            reordered.clear();
+            for (int i : idx) reordered.add(validIds.get(i));
+            acc.parentOrder.clear();
+            acc.parentOrder.addAll(reordered);
+            // bestScore 同步为 rerank 分数（保留两位小数精度语义不重要，取原值）
+            for (int i = 0; i < validIds.size(); i++) {
+                acc.bestScore.put(validIds.get(i), scores.get(i));
+            }
+        } catch (Exception e) {
+            log.warn("rerank 失败，保持原序: {}", e.getMessage());
+        }
+    }
+
     /** 累积器 → 父文档上下文：H2 回查父块全文与来源文件名，字符预算内按命中顺序编号组装。 */
     public RetrievalResult assemble(Accumulator acc) {
+        return assemble(acc, null);
+    }
+
+    /**
+     * E2：带 rerank 的组装。rerankProvider 可用时按 query 对候选父块重排，
+     * 重排失败/不可用不阻断，按原序返回。
+     */
+    public RetrievalResult assemble(Accumulator acc, String rerankQuery) {
         if (acc.parentOrder.isEmpty()) {
             return new RetrievalResult(List.of(), "");
         }
+        maybeRerank(acc, rerankQuery);
 
         // H2 回查父块全文与来源文件名（事实源）
         Map<String, KbParentChunk> parents = new HashMap<>();
