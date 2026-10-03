@@ -87,6 +87,19 @@ public class IngestTaskHandler implements TaskHandler {
         return "INGEST";
     }
 
+    /**
+     * 任务终态失败钩子：把文档置 FAILED 并记录错误，避免前端列表长期卡在中间态。
+     * 钩子由 TaskWorker.failTask 在 RETRY 耗尽或 Fatal 时触发。
+     */
+    @Override
+    public void onFailed(TaskExecutionContext ctx, ErrorCode code, String msg) {
+        String docId = ctx.args().path("docId").asText(null);
+        if (docId == null || docId.isBlank()) {
+            return;
+        }
+        ingestion.markFailedStep(docId, code.name() + ": " + (msg == null ? "任务失败" : msg));
+    }
+
     @Override
     public List<StepDef> planSteps(JsonNode payloadArgs) {
         List<StepDef> steps = new ArrayList<>(List.of(

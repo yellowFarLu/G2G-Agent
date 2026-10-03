@@ -25,4 +25,11 @@ public interface TaskHandler {
     /** 任务被取消时的副作用清理钩子（默认空）。 */
     default void onCancel(TaskExecutionContext ctx) {
     }
+
+    /**
+     * 任务最终失败（重试耗尽或 Fatal）时的副作用清理/回滚钩子。
+     * 例如 INGEST 任务失败时应把 KbDocument 状态回滚为 FAILED，避免前端列表长期卡住。
+     */
+    default void onFailed(TaskExecutionContext ctx, ErrorCode code, String msg) {
+    }
 }

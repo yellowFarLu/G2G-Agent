@@ -474,6 +474,24 @@ public class IngestionService {
         log.info("文档入库完成: docId={} filename={} children={}", docId, doc.getFilename(), children.size());
     }
 
+    /**
+     * 任务终态失败钩子（TaskHandler.onFailed → IngestTaskHandler）：把文档置 FAILED 并记录错误。
+     * 不覆盖 READY/AI_SKIPPED 终态（任务已正常收尾后不允许回滚）。
+     */
+    public void markFailedStep(String docId, String errorMsg) {
+        KbDocument doc = docRepo.findById(docId).orElse(null);
+        if (doc == null) {
+            return;
+        }
+        if (KbDocument.READY.equals(doc.getStatus()) || KbDocument.AI_SKIPPED.equals(doc.getStatus())) {
+            return;
+        }
+        doc.setStatus(KbDocument.FAILED);
+        doc.setError(errorMsg == null ? "任务失败" : errorMsg);
+        docRepo.save(doc);
+        log.warn("文档入库失败（任务终态）: docId={} filename={} error={}", docId, doc.getFilename(), errorMsg);
+    }
+
     /** 全流水线（同步、异常上抛由调用方分类）：任务 handler 与旧异步入口共用。 */
     public IngestOutcome runPipeline(String docId, String filename, byte[] bytes, KnowledgeTagContext tagContext) {
         String raw = parseStep(docId, filename, bytes);

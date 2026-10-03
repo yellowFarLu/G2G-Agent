@@ -294,7 +294,7 @@ public class TaskWorker implements TaskMessageSink {
             if (step.checkpoint() != null && !validJson(step.checkpoint())) {
                 // 恢复数据损坏：重试无意义，直接致命失败，不再投递（Task 8 裁定）
                 stepRepo.markFailed(taskId, step.stepNo(), "步骤 checkpoint JSON 损坏", Instant.now());
-                failTask(task, ErrorCode.INTERNAL, "步骤 checkpoint JSON 损坏: stepNo=" + step.stepNo());
+                failTask(task, handler, ctx, ErrorCode.INTERNAL, "步骤 checkpoint JSON 损坏: stepNo=" + step.stepNo());
                 return;
             }
             ctx.seedStep(new StepDef(step.stepNo(), step.stepType(), step.stepName(), false, null),
@@ -337,7 +337,7 @@ public class TaskWorker implements TaskMessageSink {
             // 任务级超时（规格 3.3）：超 deadline 按 TIMEOUT 走统一重试/终态分类
             if (isDeadlineExceeded(task)) {
                 stepRepo.markFailed(taskId, def.no(), "任务级超时(deadlineSec)", Instant.now());
-                classifyAndTerminate(task, ErrorCode.TIMEOUT, "任务级超时(deadlineSec): " + def.name());
+                classifyAndTerminate(task, handler, ctx, ErrorCode.TIMEOUT, "任务级超时(deadlineSec): " + def.name());
                 return;
             }
 
@@ -360,7 +360,7 @@ public class TaskWorker implements TaskMessageSink {
                 future.cancel(true);
                 stepRepo.markFailed(taskId, def.no(),
                         "步骤超时(" + stepTimeout(def).toSeconds() + "s)", Instant.now());
-                classifyAndTerminate(task, ErrorCode.TIMEOUT, "步骤超时: " + def.name());
+                classifyAndTerminate(task, handler, ctx, ErrorCode.TIMEOUT, "步骤超时: " + def.name());
                 return;
             } catch (ExecutionException ee) {
                 Throwable cause = ee.getCause() == null ? ee : ee.getCause();
@@ -382,12 +382,12 @@ public class TaskWorker implements TaskMessageSink {
                 }
                 stepRepo.markFailed(taskId, def.no(), String.valueOf(cause.getMessage()), Instant.now());
                 ErrorClassifier.Decision decision = errorClassifier.classify(cause);
-                classifyAndTerminate(task, decision.code(), cause.getMessage());
+                classifyAndTerminate(task, handler, ctx, decision.code(), cause.getMessage());
                 return;
             } catch (InterruptedException ie) {
                 Thread.currentThread().interrupt();
                 future.cancel(true);
-                failTask(task, ErrorCode.INTERNAL, "worker 线程被中断");
+                failTask(task, handler, ctx, ErrorCode.INTERNAL, "worker 线程被中断");
                 return;
             }
 
@@ -421,12 +421,13 @@ public class TaskWorker implements TaskMessageSink {
         return Instant.now().isAfter(task.createdAt().plus(Duration.ofSeconds(deadlineSec)));
     }
 
-    /** ⑦ 可重试且未超上限 → RETRY 退避重投；否则 FAILED。 */
-    private void classifyAndTerminate(TaskInstance task, ErrorCode code, String msg) {
+    /** ⑦ 可重试且未超上限 → RETRY 退避重投；否则 FAILED（并触发 handler.onFailed 副作用钩子）。 */
+    private void classifyAndTerminate(TaskInstance task, TaskHandler handler, TaskExecutionContext ctx,
+                                      ErrorCode code, String msg) {
         if (code.retryable() && task.attempt() < task.maxAttempts()) {
             retryTask(task, code, msg);
         } else {
-            failTask(task, code, msg);
+            failTask(task, handler, ctx, code, msg);
         }
     }
 
@@ -452,6 +453,11 @@ public class TaskWorker implements TaskMessageSink {
     }
 
     private void failTask(TaskInstance task, ErrorCode code, String msg) {
+        failTask(task, null, null, code, msg);
+    }
+
+    private void failTask(TaskInstance task, TaskHandler handler, TaskExecutionContext ctx,
+                          ErrorCode code, String msg) {
         if (yieldToCancelFlow(task.taskId(), task)) {
             return;
         }
@@ -465,6 +471,14 @@ public class TaskWorker implements TaskMessageSink {
                 MAPPER.createObjectNode().put("errorCode", code.name()).put("msg", String.valueOf(msg))));
         streamBus.publish(new StreamEvent(task.taskId(), "error",
                 MAPPER.createObjectNode().put("errorCode", code.name()).put("msg", String.valueOf(msg))));
+        // 终态失败副作用钩子（如 INGEST 回滚文档状态）；钩子异常不影响任务终态
+        if (handler != null && ctx != null) {
+            try {
+                handler.onFailed(ctx, code, msg);
+            } catch (Exception e) {
+                log.warn("任务失败钩子执行异常 taskId={} type={}: {}", task.taskId(), task.taskType(), e.getMessage());
+            }
+        }
     }
 
     private void suspendTask(TaskInstance task) {
