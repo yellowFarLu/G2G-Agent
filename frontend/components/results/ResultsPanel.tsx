@@ -8,7 +8,7 @@ import type { DocumentView, DocVersion, ExtractedField } from '@/lib/types';
 import DocStatusTag from '@/components/common/DocStatusTag';
 import FieldTable from '@/components/results/FieldTable';
 import FieldLineageDrawer from '@/components/results/FieldLineageDrawer';
-import ConflictsTab from '@/components/results/ConflictsTab';
+import ConflictReviewPanel from '@/components/govern/ConflictReviewPanel';
 
 export default function ResultsPanel({ docId }: { docId: string }) {
   const [doc, setDoc] = useState<DocumentView | null>(null);
@@ -86,7 +86,7 @@ export default function ResultsPanel({ docId }: { docId: string }) {
     {
       key: 'conflicts',
       label: '冲突',
-      children: <ConflictsTab docId={docId} />,
+      children: <ConflictReviewPanel />,
     },
   ];
 

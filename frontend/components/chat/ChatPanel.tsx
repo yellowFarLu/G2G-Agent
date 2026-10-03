@@ -16,13 +16,17 @@ import {
   Typography,
 } from 'antd';
 import {
+  DislikeOutlined,
+  LikeOutlined,
   LoadingOutlined,
   PlusOutlined,
   RobotOutlined,
   SendOutlined,
+  StopOutlined,
   UserOutlined,
 } from '@ant-design/icons';
-import { getChatMessages, listChatSessions } from '@/lib/api';
+import { useRouter } from 'next/navigation';
+import { getChatMessages, listChatSessions, submitFeedback } from '@/lib/api';
 import { chatStream } from '@/lib/sse';
 import { getSettings } from '@/lib/settings';
 import type { ChatStage, Source } from '@/lib/types';
@@ -37,16 +41,24 @@ interface ChatMsg {
   blocked?: string;
   error?: string;
   streaming?: boolean;
+  /** 本条回答归属的后端权威会话 ID（session 事件下发），用于反馈/查链路。 */
+  sid?: string;
+  /** 知识库未命中兜底来源：web_search 联网 / model_knowledge 模型通用知识。 */
+  fallbackMode?: string;
+  feedback?: 'USEFUL' | 'USELESS';
+  feedbackFailed?: boolean;
 }
 
 const STAGE_LABEL: Record<ChatStage, string> = {
+  routing: '分析问题',
   rewriting: '改写中',
   retrieving: '检索中',
+  grading: '证据评估',
   generating: '生成中',
   fallback: '兜底应答',
 };
 
-const STAGE_ORDER: ChatStage[] = ['rewriting', 'retrieving', 'generating', 'fallback'];
+const STAGE_ORDER: ChatStage[] = ['routing', 'rewriting', 'retrieving', 'grading', 'generating', 'fallback'];
 
 function emptyAssistant(): ChatMsg {
   return { role: 'assistant', content: '', sources: [], stage: null, streaming: true };
@@ -54,6 +66,7 @@ function emptyAssistant(): ChatMsg {
 
 export default function ChatPanel() {
   const { message } = App.useApp();
+  const router = useRouter();
   const [sessions, setSessions] = useState<{ sessionId: string; label: string }[]>([]);
   const [sessionsLoading, setSessionsLoading] = useState(true);
   const [sessionId, setSessionId] = useState<string | null>(null);
@@ -73,12 +86,15 @@ export default function ChatPanel() {
         .map((s) => {
           const id = typeof s.sessionId === 'string' ? s.sessionId : null;
           if (!id) return null;
+          // 标题优先级：后端 title（首条用户提问）> preview > lastQuestion > sessionId 兜底
           const title =
             typeof s.title === 'string' && s.title
               ? s.title
-              : typeof s.lastQuestion === 'string' && s.lastQuestion
-                ? (s.lastQuestion as string)
-                : id.slice(0, 8);
+              : typeof s.preview === 'string' && s.preview
+                ? (s.preview as string)
+                : typeof s.lastQuestion === 'string' && s.lastQuestion
+                  ? (s.lastQuestion as string)
+                  : id.slice(0, 8);
           return { sessionId: id, label: title };
         })
         .filter((x): x is { sessionId: string; label: string } => x !== null);
@@ -167,15 +183,17 @@ export default function ChatPanel() {
             if (sid) {
               sessionIdRef.current = sid;
               setSessionId(sid);
+              updateLastAssistant((m) => ({ ...m, sid }));
             }
             break;
           }
           case 'stage': {
-            const d = data as { stage?: ChatStage; rewrittenQuery?: string };
+            const d = data as { stage?: ChatStage; rewrittenQuery?: string; mode?: string };
             updateLastAssistant((m) => ({
               ...m,
               stage: d.stage ?? null,
               rewrittenQuery: d.rewrittenQuery ?? m.rewrittenQuery,
+              fallbackMode: d.stage === 'fallback' ? d.mode ?? m.fallbackMode : m.fallbackMode,
             }));
             break;
           }
@@ -219,6 +237,45 @@ export default function ChatPanel() {
     return () => abortRef.current?.abort();
   }, []);
 
+  /** 中断当前 SSE 流（老 8080 页「停止」按钮能力）。 */
+  const stop = () => {
+    abortRef.current?.abort();
+    abortRef.current = null;
+    updateLastAssistant((m) => ({
+      ...m,
+      streaming: false,
+      stage: null,
+      content: m.content ? `${m.content}\n\n（已停止）` : m.content,
+    }));
+    setSending(false);
+  };
+
+  /** 👍/👎 会话级反馈：写入 kb_feedback，是治理看板有用率与可观测反馈审计的数据源。 */
+  const sendFeedback = async (index: number, type: 'USEFUL' | 'USELESS') => {
+    const target = messages[index];
+    const sid = target?.sid ?? sessionIdRef.current;
+    if (!target || !sid) return;
+    try {
+      await submitFeedback({ sessionId: sid, conversationId: sid, chunkId: null, feedbackType: type });
+      setMessages((prev) => prev.map((m, i) => (i === index ? { ...m, feedback: type, feedbackFailed: false } : m)));
+    } catch {
+      setMessages((prev) => prev.map((m, i) => (i === index ? { ...m, feedbackFailed: true } : m)));
+    }
+  };
+
+  /** 当前会话标题：优先取会话列表 label（后端 title），新会话则用首条用户提问即时生成。 */
+  const currentTitle = (() => {
+    if (!sessionId) return null;
+    const found = sessions.find((s) => s.sessionId === sessionId);
+    if (found) return found.label;
+    const firstUser = messages.find((m) => m.role === 'user');
+    if (firstUser) {
+      const oneLine = firstUser.content.replace(/\s+/g, ' ').trim();
+      return oneLine.length > 40 ? `${oneLine.slice(0, 40)}…` : oneLine;
+    }
+    return null;
+  })();
+
   return (
     <div style={{ display: 'flex', gap: 16, height: 'calc(100vh - 160px)' }}>
       <Card
@@ -241,9 +298,14 @@ export default function ChatPanel() {
               <List.Item
                 style={{
                   cursor: 'pointer',
-                  background: s.sessionId === sessionId ? '#e6f4ff' : undefined,
+                  background:
+                    s.sessionId === sessionId
+                      ? 'linear-gradient(135deg, rgba(99,102,241,0.16), rgba(217,70,239,0.12))'
+                      : undefined,
+                  border:
+                    s.sessionId === sessionId ? '1px solid rgba(99,102,241,0.25)' : undefined,
                   padding: '8px 12px',
-                  borderRadius: 4,
+                  borderRadius: 10,
                 }}
                 onClick={() => void openSession(s.sessionId)}
               >
@@ -257,9 +319,39 @@ export default function ChatPanel() {
       </Card>
 
       <Card
-        title="对话"
+        title={
+          <Space size={8}>
+            {currentTitle ? (
+              <Typography.Text strong copyable={{ text: currentTitle }} style={{ fontSize: 15 }}>
+                {currentTitle}
+              </Typography.Text>
+            ) : (
+              <span>对话</span>
+            )}
+            {currentTitle && sessionId && (
+              <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                /
+              </Typography.Text>
+            )}
+            {sessionId && (
+              <Typography.Text type="secondary" style={{ fontSize: 11 }} copyable={{ text: sessionId }}>
+                {sessionId}
+              </Typography.Text>
+            )}
+          </Space>
+        }
         style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}
         styles={{ body: { flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' } }}
+        extra={
+          sessionId ? (
+            <Button
+              size="small"
+              onClick={() => router.push(`/?tab=observe&sessionId=${encodeURIComponent(sessionId)}`)}
+            >
+              查链路
+            </Button>
+          ) : undefined
+        }
       >
         <div style={{ flex: 1, overflow: 'auto', paddingRight: 8 }}>
           {historyLoading ? (
@@ -285,15 +377,35 @@ export default function ChatPanel() {
                   marginBottom: 16,
                 }}
               >
-                {m.role === 'assistant' && <Avatar icon={<RobotOutlined />} style={{ marginRight: 8, flexShrink: 0 }} />}
+                {m.role === 'assistant' && (
+                  <Avatar
+                    icon={<RobotOutlined />}
+                    style={{
+                      marginRight: 8,
+                      flexShrink: 0,
+                      background: 'linear-gradient(135deg, #6366f1, #8b5cf6)',
+                      boxShadow: '0 4px 12px rgba(99,102,241,0.4)',
+                    }}
+                  />
+                )}
                 <div
                   style={{
                     maxWidth: '75%',
-                    background: m.role === 'user' ? '#1677ff' : '#fff',
+                    background:
+                      m.role === 'user'
+                        ? 'linear-gradient(135deg, #6366f1 0%, #8b5cf6 55%, #d946ef 100%)'
+                        : 'rgba(255,255,255,0.85)',
+                    backdropFilter: m.role === 'assistant' ? 'blur(12px)' : undefined,
+                    WebkitBackdropFilter: m.role === 'assistant' ? 'blur(12px)' : undefined,
                     color: m.role === 'user' ? '#fff' : undefined,
-                    border: m.role === 'assistant' ? '1px solid #f0f0f0' : undefined,
-                    borderRadius: 8,
+                    border:
+                      m.role === 'assistant' ? '1px solid rgba(99,102,241,0.18)' : undefined,
+                    borderRadius: 14,
                     padding: '10px 14px',
+                    boxShadow:
+                      m.role === 'user'
+                        ? '0 6px 18px rgba(124,58,237,0.35)'
+                        : '0 4px 14px rgba(49,46,129,0.08)',
                   }}
                 >
                   {m.role === 'assistant' && m.streaming && (m.stage || !m.content) && (
@@ -313,6 +425,15 @@ export default function ChatPanel() {
                   )}
                   {m.role === 'assistant' ? (
                     <>
+                      {m.fallbackMode && (
+                        <div style={{ marginBottom: 6 }}>
+                          <Tag color={m.fallbackMode === 'web_search' ? 'blue' : 'orange'}>
+                            {m.fallbackMode === 'web_search'
+                              ? '企业知识库未命中 · 联网搜索回答'
+                              : '企业知识库未命中 · 模型通用知识回答（非企业文档，请注意甄别）'}
+                          </Tag>
+                        </div>
+                      )}
                       <AnswerText text={m.content} sources={m.sources} />
                       {m.streaming && m.content && <LoadingOutlined spin style={{ marginLeft: 6 }} />}
                       {m.sources.length > 0 && !m.streaming && (
@@ -334,12 +455,54 @@ export default function ChatPanel() {
                       {m.error && (
                         <Alert type="error" showIcon title="对话出错" description={m.error} style={{ marginTop: 8 }} />
                       )}
+                      {!m.streaming && m.content && !m.blocked && !m.error && (
+                        <div style={{ marginTop: 6 }}>
+                          <Button
+                            size="small"
+                            type="text"
+                            icon={<LikeOutlined />}
+                            disabled={!!m.feedback}
+                            onClick={() => void sendFeedback(idx, 'USEFUL')}
+                          >
+                            有用
+                          </Button>
+                          <Button
+                            size="small"
+                            type="text"
+                            icon={<DislikeOutlined />}
+                            disabled={!!m.feedback}
+                            onClick={() => void sendFeedback(idx, 'USELESS')}
+                          >
+                            无用
+                          </Button>
+                          {m.feedback && (
+                            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                              {m.feedback === 'USEFUL' ? '已记录：有用，谢谢反馈' : '已记录：无用，我们将改进'}
+                            </Typography.Text>
+                          )}
+                          {m.feedbackFailed && (
+                            <Typography.Text type="danger" style={{ fontSize: 12 }}>
+                              反馈失败，请重试
+                            </Typography.Text>
+                          )}
+                        </div>
+                      )}
                     </>
                   ) : (
                     <span style={{ whiteSpace: 'pre-wrap' }}>{m.content}</span>
                   )}
                 </div>
-                {m.role === 'user' && <Avatar icon={<UserOutlined />} style={{ marginLeft: 8, flexShrink: 0 }} />}
+                {m.role === 'user' && (
+                  <Avatar
+                    icon={<UserOutlined />}
+                    style={{
+                      marginLeft: 8,
+                      flexShrink: 0,
+                      background: 'linear-gradient(135deg, #0891b2, #22d3ee)',
+                      boxShadow: '0 4px 12px rgba(8,145,178,0.4)',
+                    }}
+                  />
+                )}
               </div>
             ))
           )}
@@ -360,9 +523,15 @@ export default function ChatPanel() {
                 }
               }}
             />
-            <Button type="primary" icon={<SendOutlined />} loading={sending} onClick={send}>
-              发送
-            </Button>
+            {sending ? (
+              <Button danger icon={<StopOutlined />} onClick={stop}>
+                停止
+              </Button>
+            ) : (
+              <Button type="primary" icon={<SendOutlined />} onClick={send}>
+                发送
+              </Button>
+            )}
           </Space.Compact>
         </div>
       </Card>

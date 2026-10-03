@@ -41,7 +41,7 @@ const TYPE_COLORS: Record<string, string> = {
   '其他': '#8c8c8c',
 };
 
-export default function GraphPage() {
+export default function GraphPanel() {
   const router = useRouter();
   const [query, setQuery] = useState('');
   const [loading, setLoading] = useState(false);
@@ -121,8 +121,8 @@ export default function GraphPage() {
           const fy = (dy / dist) * force;
           a.x += fx * 0.01;
           a.y += fy * 0.01;
-          b.x -= fx * 0.01;
-          b.y -= fy * 0.01;
+          b.x -= fx;
+          b.y -= fy;
         }
       }
       // 引力（边）
@@ -240,7 +240,7 @@ export default function GraphPage() {
                   renderItem={(item) => (
                     <List.Item
                       style={{ cursor: 'pointer' }}
-                      onClick={() => router.push(`/results/${item.sourceDocId}`)}
+                      onClick={() => router.push(`/?tab=upload&docId=${item.sourceDocId}`)}
                     >
                       <List.Item.Meta
                         title={

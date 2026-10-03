@@ -108,7 +108,7 @@ export default function UploadPanel({ onUploaded }: { onUploaded: () => void }) 
                     <Space>
                       <span>「{r.filename}」上传成功</span>
                       {r.doc?.taskId && (
-                        <Link href={`/tasks/${r.doc.taskId}`}>查看任务 {r.doc.taskId.slice(0, 8)}…</Link>
+                        <Link href={`/?tab=tasks&taskId=${encodeURIComponent(r.doc.taskId)}`}>查看任务 {r.doc.taskId.slice(0, 8)}…</Link>
                       )}
                     </Space>
                   }
@@ -126,7 +126,7 @@ export default function UploadPanel({ onUploaded }: { onUploaded: () => void }) 
                     <Space>
                       <span>「{r.filename}」重复上传，已关联既有任务</span>
                       {r.doc?.taskId && (
-                        <Link href={`/tasks/${r.doc.taskId}`}>查看任务 {r.doc.taskId.slice(0, 8)}…</Link>
+                        <Link href={`/?tab=tasks&taskId=${encodeURIComponent(r.doc.taskId)}`}>查看任务 {r.doc.taskId.slice(0, 8)}…</Link>
                       )}
                     </Space>
                   }

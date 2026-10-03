@@ -127,7 +127,7 @@ export interface Source {
   filename: string;
 }
 
-export type ChatStage = 'rewriting' | 'retrieving' | 'generating' | 'fallback';
+export type ChatStage = 'routing' | 'rewriting' | 'retrieving' | 'grading' | 'generating' | 'fallback';
 
 export interface ChatSessionItem extends Record<string, unknown> {
   sessionId?: string;
@@ -245,6 +245,9 @@ export interface ConflictItem extends Record<string, unknown> {
   domainTag?: string;
   subDomainTag?: string;
   status?: string;
+  resolution?: string | null;
+  resolvedBy?: string | null;
+  detectedAt?: string;
 }
 
 /** 冲突 diff 单侧 chunk 视图（后端 toDiffView 的键）。 */
@@ -301,4 +304,104 @@ export interface ReviewCaseResolveRequest {
   action: ReviewAction;
   editedFields?: Record<string, string>;
   comment?: string;
+}
+
+// ============ 用户反馈 ============
+export interface FeedbackRequest {
+  sessionId: string;
+  conversationId: string;
+  /** 会话级反馈不强挂 chunk（SSE sources 仅父文档粒度），传 null。 */
+  chunkId: string | null;
+  feedbackType: 'USEFUL' | 'USELESS';
+  feedbackComment?: string;
+}
+
+// ============ 知识治理（指标聚合） ============
+export interface StaleKnowledgeItem {
+  chunkId: string;
+  docId: string | null;
+  domainTag: string | null;
+  subDomainTag: string | null;
+  createdBy: string | null;
+  createdAt: string | null;
+  recentRetrievals: number;
+  staleScore: number;
+}
+
+/** GET /api/metrics/aggregation；未聚合时 aggregatedAt 为 null 且带 message。 */
+export interface MetricsAggregation {
+  aggregatedAt: string | null;
+  message?: string;
+  totalKnowledge?: number;
+  totalRetrievals?: number;
+  totalCitations?: number;
+  usefulCount?: number;
+  uselessCount?: number;
+  usefulnessRate?: number;
+  recallRate?: number;
+  staleKnowledgeCount?: number;
+  staleKnowledge?: StaleKnowledgeItem[];
+}
+
+// ============ 统一可观测 ============
+export interface ObservabilityDashboard {
+  businessMetrics?: {
+    period?: string;
+    retrievals?: number;
+    citations?: number;
+    useful?: number;
+    useless?: number;
+  };
+  knowledgeDetails?: {
+    totalKnowledge?: number;
+    staleKnowledge?: number;
+    pendingConflicts?: number;
+  };
+  feedbackAudit?: {
+    totalFeedback?: number;
+    gatewayBlocked?: number;
+    contentViolations?: number;
+    violationTypes?: string[];
+  };
+}
+
+export interface KnowledgeMetaItem {
+  chunkId: string;
+  docId: string | null;
+  domainTag: string | null;
+  subDomainTag: string | null;
+  requiredIdentity: string | null;
+  createdBy: string | null;
+  sourceFilename: string | null;
+  version: number | null;
+  createdAt: string | null;
+}
+
+export interface FeedbackAuditItem {
+  id: number;
+  sessionId: string | null;
+  chunkId: string | null;
+  feedbackType: string | null;
+  feedbackComment: string | null;
+  createdAt: string | null;
+}
+
+export interface GatewayAuditItem {
+  id: number;
+  direction: string | null;
+  detectorName: string | null;
+  detectionResult: string | null;
+  riskScore: number | null;
+  userId: string | null;
+  createdAt: string | null;
+}
+
+export interface TraceSpanItem {
+  id: number;
+  nodeId: string | null;
+  spanType: string | null;
+  status: string | null;
+  durationMs: number;
+  modelUsed: string | null;
+  errorMsg: string | null;
 }

@@ -379,7 +379,7 @@ PENDING ─► DISPATCH ─► RUNNING ─┬─► COMPLETED ✅
 
 ```bash
 mvn spring-boot:run          # 无需 Redis/Milvus/MySQL/Key，约 17 秒启动
-# 打开 http://localhost:8080 （内置静态 UI）
+# 打开 http://localhost:8080 （Next.js 静态导出产物，由 Spring Boot 直接托管，单入口单进程）
 # 配置 DASHSCOPE_API_KEY 解锁真实大模型；MILVUS_HOST 解锁向量检索
 ```
 
@@ -399,8 +399,19 @@ export WIKIAGENT_GRAPH_ENABLED=true   # 入库时自动抽取实体关系，/gra
 
 ### 前端开发
 
+日常运行时只需启动后端（8080 即托管静态产物）。开发模式才需要 3000：
+
 ```bash
 cd frontend && npm install && npm run dev    # http://localhost:3000，代理 /api → 8080
+```
+
+静态产物重新构建并同步到 Spring Boot：
+
+```bash
+cd frontend
+NEXT_BUILD_STATIC=true npm run build          # export 静态输出到 out/
+rsync -a --delete out/ ../src/main/resources/static/
+mvn compile -DskipTests                       # 同步到 target/classes/static
 ```
 
 ### 核心环境变量
@@ -430,15 +441,17 @@ cd frontend && npm install && npm run dev    # http://localhost:3000，代理 /a
 
 | 路由 | 页面 | 看点 |
 |---|---|---|
-| `/chat` | 对话 | SSE 流式、引用角标 + 来源弹层、有用/无用反馈、查 trace 入口 |
-| `/upload` | 材料上传 | 拖拽/多文件/业务域标签/重复提示 |
-| `/tasks`、`/tasks/{id}` | 任务中心 | 列表/详情、步骤级 SSE 进度、事件流、暂停/恢复/取消/重试 |
-| `/workbench` | 人工工作台 | 复核案件、工具审批、解密队列、历史版本 diff |
-| `/graph` | 知识图谱 | Canvas 力导向图、实体搜索、类型配色、跳来源文档 |
-| `/results/[docId]` | 结构化结果 | 字段表 + 置信度 + 冲突标记 + 页码来源 |
-| `/settings` | 身份设置 | 业务身份与域权限 |
+| `/?tab=chat` | 对话 | SSE 流式、6 阶段标签、停止、引用角标、👍/👎 反馈、查链路跳转 |
+| `/?tab=upload` | 材料上传 | 拖拽/多文件/业务域标签/重复提示、父块/子块/删除 |
+| `/?tab=tasks` | 任务中心 | 列表/详情、步骤级 SSE 进度、事件流、暂停/恢复/取消/重试 |
+| `/?tab=workbench` | 人工工作台 | 复核案件、工具审批、解密队列、历史版本 diff |
+| `/?tab=graph` | 知识图谱 | Canvas 力导向图、实体搜索、类型配色、跳来源文档 |
+| `/?tab=upload&docId=xxx` | 结构化结果 | 字段表 + 置信度 + 冲突标记 + 页码来源 |
+| `/?tab=settings` | 身份设置 | 全局业务身份与域权限 |
+| `/?tab=govern` | 知识治理 | KPI 看板、疑似过期知识、冲突审核 |
+| `/?tab=observe` | 可观测 | 执行路径、业务指标、知识明细、反馈审计 |
 
-内置零构建静态 UI 在 `src/main/resources/static/`：对话 / 知识库管理 / 知识治理 / 可观测大屏。
+旧一级路由（`/chat`、`/upload`、`/tasks`、`/workbench`、`/graph`、`/settings`、`/results/:docId`）已统一 303 重定向到 `/?tab=xxx`，保证旧书签不 404。
 
 ---
 

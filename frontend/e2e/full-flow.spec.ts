@@ -270,9 +270,9 @@ test('AC-G1 全链路：上传→进度→字段结果→来源→人工修改�
   });
   await expect(page.getByText('「e2e-合同.txt」上传成功').first()).toBeVisible();
 
-  // 2) 任务进度（点击成功提示中的任务链接）
+  // 2) 任务进度（点击成功提示中的任务链接，统一控制台在「任务中心」Tab 内展开详情）
   await page.getByRole('link', { name: /查看任务/ }).first().click();
-  await expect(page).toHaveURL(new RegExp(`/tasks/${TASK_ID}`));
+  await expect(page).toHaveURL(new RegExp(`\\?tab=tasks&taskId=${TASK_ID}`));
   await expect(page.getByText('执行步骤')).toBeVisible();
   await expect(page.getByText('VERIFY').first()).toBeVisible();
   await expect(page.getByText('事件时间线')).toBeVisible();

@@ -42,13 +42,15 @@ public class ChatHistoryService {
             Map<String, Object> item = new LinkedHashMap<>();
             item.put("sessionId", sid);
             item.put("messageCount", msgs.size());
-            // 取第一条 user 消息作为预览
-            String preview = msgs.stream()
+            // 取第一条 user 消息作为预览与标题（产品化：标题=本会话内容主题，不暴露 sessionId）
+            String firstUserMsg = msgs.stream()
                     .filter(m -> "user".equals(m.getRole()))
                     .map(ChatHistoryEntity::getContent)
                     .findFirst()
                     .orElse(msgs.get(0).getContent());
-            item.put("preview", preview.length() > 50 ? preview.substring(0, 50) + "…" : preview);
+            String oneLine = firstUserMsg.replaceAll("\\s+", " ").trim();
+            item.put("title", oneLine.length() > 40 ? oneLine.substring(0, 40) + "…" : oneLine);
+            item.put("preview", oneLine.length() > 50 ? oneLine.substring(0, 50) + "…" : oneLine);
             item.put("lastTime", msgs.get(msgs.size() - 1).getCreatedAt());
             item.put("createdAt", msgs.get(0).getCreatedAt());
             result.add(item);

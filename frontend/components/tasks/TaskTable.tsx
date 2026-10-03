@@ -125,7 +125,7 @@ export default function TaskTable() {
         locale={{ emptyText: <Empty description="暂无任务" /> }}
         onRow={(record) => ({
           style: { cursor: 'pointer' },
-          onClick: () => router.push(`/tasks/${record.taskId}`),
+          onClick: () => router.push(`/?tab=tasks&taskId=${encodeURIComponent(record.taskId)}`),
         })}
       />
     </Card>

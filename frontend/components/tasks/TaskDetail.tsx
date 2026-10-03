@@ -348,7 +348,7 @@ export default function TaskDetail({ taskId }: { taskId: string }) {
                       {h.status}
                     </Tag>
                     {(h.status === 'OPEN' || h.status === 'CLAIMED') && (
-                      <Link href="/workbench">前往工作台处理</Link>
+                      <Link href="/?tab=workbench">前往工作台处理</Link>
                     )}
                   </Space>
                   <div>

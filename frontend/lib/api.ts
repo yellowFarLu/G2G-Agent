@@ -10,18 +10,25 @@ import type {
   DocumentView,
   DocVersion,
   EventView,
+  FeedbackAuditItem,
+  FeedbackRequest,
   FieldLineageView,
+  GatewayAuditItem,
   HumanTaskResolveRequest,
   HumanTaskView,
   IdentityProfile,
   IdentityUpdateAck,
   IdentityUpdateRequest,
+  KnowledgeMetaItem,
   LineageView,
+  MetricsAggregation,
+  ObservabilityDashboard,
   ReviewCase,
   ReviewCaseResolveRequest,
   Source,
   StepView,
   TaskView,
+  TraceSpanItem,
   VersionDiff,
 } from './types';
 
@@ -223,6 +230,64 @@ export function listConflicts(status?: string): Promise<ConflictItem[]> {
 
 export function getConflictDiff(id: string): Promise<ConflictDiff> {
   return request<ConflictDiff>(`/api/conflicts/${encodeURIComponent(id)}/diff`);
+}
+
+export function scanConflicts(): Promise<{ newConflicts?: number }> {
+  return request<{ newConflicts?: number }>('/api/conflicts/scan', { method: 'POST' });
+}
+
+export type ConflictResolution =
+  | 'KEEP_A'
+  | 'KEEP_B'
+  | 'KEEP_BOTH'
+  | 'MERGE'
+  | 'DELETE_A'
+  | 'DELETE_B';
+
+export function resolveConflict(
+  id: string,
+  body: { resolution: ConflictResolution; resolvedBy: string; comment?: string },
+): Promise<unknown> {
+  return request<unknown>(`/api/conflicts/${encodeURIComponent(id)}/resolve`, jsonBody(body));
+}
+
+export function ignoreConflict(
+  id: string,
+  body: { resolvedBy: string; comment?: string },
+): Promise<unknown> {
+  return request<unknown>(`/api/conflicts/${encodeURIComponent(id)}/ignore`, jsonBody(body));
+}
+
+// ============ 用户反馈 ============
+export function submitFeedback(body: FeedbackRequest): Promise<unknown> {
+  return request<unknown>('/api/feedback', jsonBody(body));
+}
+
+// ============ 知识治理 ============
+/** refresh=true 手动触发一次聚合后再返回快照。 */
+export function getMetricsAggregation(refresh = false): Promise<MetricsAggregation> {
+  return request<MetricsAggregation>(`/api/metrics/aggregation${refresh ? '?refresh=true' : ''}`);
+}
+
+// ============ 统一可观测 ============
+export function getObservabilityDashboard(): Promise<ObservabilityDashboard> {
+  return request<ObservabilityDashboard>('/api/observability/dashboard');
+}
+
+export function listKnowledgeMeta(): Promise<KnowledgeMetaItem[]> {
+  return request<KnowledgeMetaItem[]>('/api/observability/knowledge');
+}
+
+export function listFeedbackAudit(): Promise<FeedbackAuditItem[]> {
+  return request<FeedbackAuditItem[]>('/api/observability/feedback');
+}
+
+export function listGatewayAudit(): Promise<GatewayAuditItem[]> {
+  return request<GatewayAuditItem[]>('/api/observability/gateway');
+}
+
+export function getSessionTrace(sessionId: string): Promise<TraceSpanItem[]> {
+  return request<TraceSpanItem[]>(`/api/trace/session/${encodeURIComponent(sessionId)}`);
 }
 
 // ============ 身份管理 ============
