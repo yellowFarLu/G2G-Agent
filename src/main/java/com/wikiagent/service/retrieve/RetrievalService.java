@@ -129,6 +129,9 @@ public class RetrievalService {
     /** rerank 灰度特性名（wikiagent.gray.features.rerank）。 */
     private static final String GRAY_FEATURE_RERANK = "rerank";
 
+    /** GraphRAG 服务（可选，wikiagent.graph.enabled=true 时注入）。 */
+    private final com.wikiagent.application.graph.GraphRagService graphRagService;
+
     /** Milvus 不可用截止时间戳；0 表示正常，>now 表示冷却降级中。 */
     private volatile long milvusDisabledUntil = 0L;
 
@@ -136,7 +139,8 @@ public class RetrievalService {
     public RetrievalService(WikiAgentProperties props, MilvusStoreService milvus, EmbeddingModel embeddingModel,
                             KbParentChunkRepo parentRepo, KbDocumentRepo docRepo, KbChildChunkRepo childRepo,
                             MetricEventJpaDao metricEventDao) {
-        this(props, milvus, embeddingModel, parentRepo, docRepo, childRepo, metricEventDao, null, null, false);
+        this(props, milvus, embeddingModel, parentRepo, docRepo, childRepo, metricEventDao, null, null, false,
+                null, null, null);
     }
 
     /** E5 构造（兼容）：无 RERANK 打点器。 */
@@ -147,7 +151,22 @@ public class RetrievalService {
                             org.springframework.beans.factory.ObjectProvider<KnowledgeMetadataJpaDao> metadataDao,
                             boolean milvusFilterMetadata) {
         this(props, milvus, embeddingModel, parentRepo, docRepo, childRepo, metricEventDao,
-                rerankProvider, metadataDao, milvusFilterMetadata, null, null);
+                rerankProvider, metadataDao, milvusFilterMetadata, null, null, null);
+    }
+
+    /**
+     * E2/E3/E5 12 参构造（eval 套件兼容）：无 GraphRAG。
+     */
+    public RetrievalService(WikiAgentProperties props, MilvusStoreService milvus, EmbeddingModel embeddingModel,
+                            KbParentChunkRepo parentRepo, KbDocumentRepo docRepo, KbChildChunkRepo childRepo,
+                            MetricEventJpaDao metricEventDao,
+                            org.springframework.beans.factory.ObjectProvider<RerankProvider> rerankProvider,
+                            org.springframework.beans.factory.ObjectProvider<KnowledgeMetadataJpaDao> metadataDao,
+                            boolean milvusFilterMetadata,
+                            org.springframework.beans.factory.ObjectProvider<ModelCallRecorder> callRecorder,
+                            org.springframework.beans.factory.ObjectProvider<GrayReleaseService> grayRelease) {
+        this(props, milvus, embeddingModel, parentRepo, docRepo, childRepo, metricEventDao,
+                rerankProvider, metadataDao, milvusFilterMetadata, callRecorder, grayRelease, null);
     }
 
     /**
@@ -155,6 +174,7 @@ public class RetrievalService {
      *
      * @param callRecorder RERANK 打点器（ObjectProvider 可选；无 Bean 时不打点）
      * @param grayRelease  灰度决策（ObjectProvider 可选；无 Bean 时不门控）
+     * @param graphRagService GraphRAG 图检索（ObjectProvider 可选；wikiagent.graph.enabled=true 时存在）
      */
     @org.springframework.beans.factory.annotation.Autowired
     public RetrievalService(WikiAgentProperties props, MilvusStoreService milvus, EmbeddingModel embeddingModel,
@@ -165,7 +185,8 @@ public class RetrievalService {
                             @org.springframework.beans.factory.annotation.Value(
                                     "${wikiagent.milvus.filter-metadata:false}") boolean milvusFilterMetadata,
                             org.springframework.beans.factory.ObjectProvider<ModelCallRecorder> callRecorder,
-                            org.springframework.beans.factory.ObjectProvider<GrayReleaseService> grayRelease) {
+                            org.springframework.beans.factory.ObjectProvider<GrayReleaseService> grayRelease,
+                            org.springframework.beans.factory.ObjectProvider<com.wikiagent.application.graph.GraphRagService> graphRagService) {
         this.props = props;
         this.milvus = milvus;
         this.embeddingModel = embeddingModel;
@@ -179,15 +200,47 @@ public class RetrievalService {
         this.milvusFilterMetadata = milvusFilterMetadata;
         this.callRecorder = callRecorder == null ? null : callRecorder.getIfAvailable();
         this.grayRelease = grayRelease == null ? null : grayRelease.getIfAvailable();
+        this.graphRagService = graphRagService == null ? null : graphRagService.getIfAvailable();
     }
 
     /** 单次多查询检索（一次组装，rerank 可用时重排）。 */
     public RetrievalResult retrieve(List<String> queries) {
         Accumulator acc = search(new Accumulator(), queries);
+        graphExpand(acc, queries);
         String rerankQuery = firstNonBlank(queries);
         RetrievalResult result = assemble(acc, rerankQuery);
         recordRetrievalMetrics(result);
         return result;
+    }
+
+    /**
+     * GraphRAG 图扩展（wikiagent.graph.enabled=true 时生效）：
+     * 按查询匹配实体 → 1-hop 邻居扩展 → 关联 chunk 映射回父块累积，
+     * 补充向量检索未覆盖的实体关联上下文。图检索失败不影响主流程。
+     */
+    private void graphExpand(Accumulator acc, List<String> queries) {
+        if (graphRagService == null || queries == null) {
+            return;
+        }
+        for (String q : queries) {
+            if (q == null || q.isBlank()) {
+                continue;
+            }
+            try {
+                var graphResult = graphRagService.searchWithExpansion(q);
+                if (graphResult.relatedChunkIds().isEmpty()) {
+                    continue;
+                }
+                for (KbChildChunk c : childRepo.findByIdIn(graphResult.relatedChunkIds())) {
+                    if (c.isActive()) {
+                        // 图命中给一个中等置信分，避免压过向量高分，但能被 rerank 重排
+                        acc.put(c.getParentId(), c.getDocId(), c.getId(), c.getChildIndex(), 0.5);
+                    }
+                }
+            } catch (Exception e) {
+                log.warn("GraphRAG 图扩展失败（不影响检索主流程）: {}", e.getMessage());
+            }
+        }
     }
 
     /** 单查询单次检索（兼容旧链路）。 */

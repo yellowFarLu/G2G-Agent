@@ -5,6 +5,7 @@ import { Layout, Menu, Tag, Typography } from 'antd';
 import {
   CloudUploadOutlined,
   MessageOutlined,
+  NodeIndexOutlined,
   ScheduleOutlined,
   SettingOutlined,
   ToolOutlined,
@@ -19,6 +20,7 @@ const MENU_ITEMS = [
   { key: '/tasks', icon: <ScheduleOutlined />, label: '任务中心' },
   { key: '/chat', icon: <MessageOutlined />, label: '对话' },
   { key: '/workbench', icon: <ToolOutlined />, label: '人工工作台' },
+  { key: '/graph', icon: <NodeIndexOutlined />, label: '知识图谱' },
   { key: '/settings', icon: <SettingOutlined />, label: '身份设置' },
 ];
 

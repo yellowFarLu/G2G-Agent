@@ -71,6 +71,8 @@ public class IngestionService {
     private final MilvusStoreService milvus;
     private final EmbeddingModel embeddingModel;
     private final KnowledgeTaggingService taggingService;
+    /** GraphRAG 提取服务（可选，wikiagent.graph.enabled=true 时注入）。 */
+    private final com.wikiagent.application.graph.GraphExtractionService graphExtractionService;
     /**
      * 缺陷14：embedding 精确缓存（可选）。存在且 active 时批量 embed 先查缓存，
      * 开关关闭（wikiagent.cache.embedding.enabled=false）或 Redis 缺席时由其内部 bypass 直调模型。
@@ -90,11 +92,10 @@ public class IngestionService {
                             KnowledgeTaggingService taggingService) {
         this(props, parser, cleaner, richParser, structureService, extractionService, provenance,
                 artifactStore, docRepo, parentRepo, childRepo, milvus, embeddingModel,
-                taggingService, null, "text-embedding-v4");
+                taggingService, null, "text-embedding-v4", null);
     }
 
-    /** 缺陷14 全量装配构造：末尾追加可选 {@link EmbeddingCacheService} 与 embedding 模型名。 */
-    @Autowired
+    /** 兼容旧装配（含 embedding 缓存）：无 GraphRAG。 */
     public IngestionService(WikiAgentProperties props, DocumentParser parser, TextCleaner cleaner,
                             RichDocumentParser richParser, PageStructureService structureService,
                             FieldExtractionService extractionService,
@@ -105,6 +106,24 @@ public class IngestionService {
                             ObjectProvider<EmbeddingCacheService> embeddingCache,
                             @Value("${spring.ai.dashscope.embedding.options.model:text-embedding-v4}")
                             String embeddingModelName) {
+        this(props, parser, cleaner, richParser, structureService, extractionService, provenance,
+                artifactStore, docRepo, parentRepo, childRepo, milvus, embeddingModel,
+                taggingService, embeddingCache, embeddingModelName, null);
+    }
+
+    /** 全量装配构造：末尾追加可选 {@link GraphExtractionService}（GraphRAG）。 */
+    @Autowired
+    public IngestionService(WikiAgentProperties props, DocumentParser parser, TextCleaner cleaner,
+                            RichDocumentParser richParser, PageStructureService structureService,
+                            FieldExtractionService extractionService,
+                            ProvenanceService provenance, ArtifactStore artifactStore,
+                            KbDocumentRepo docRepo, KbParentChunkRepo parentRepo, KbChildChunkRepo childRepo,
+                            MilvusStoreService milvus, EmbeddingModel embeddingModel,
+                            KnowledgeTaggingService taggingService,
+                            ObjectProvider<EmbeddingCacheService> embeddingCache,
+                            @Value("${spring.ai.dashscope.embedding.options.model:text-embedding-v4}")
+                            String embeddingModelName,
+                            ObjectProvider<com.wikiagent.application.graph.GraphExtractionService> graphExtractionService) {
         this.props = props;
         this.parser = parser;
         this.cleaner = cleaner;
@@ -121,6 +140,7 @@ public class IngestionService {
         this.taggingService = taggingService;
         this.embeddingCache = embeddingCache == null ? null : embeddingCache.getIfAvailable();
         this.embeddingModelName = embeddingModelName;
+        this.graphExtractionService = graphExtractionService == null ? null : graphExtractionService.getIfAvailable();
     }
 
     /** 入库结果摘要。 */
@@ -472,6 +492,14 @@ public class IngestionService {
         doc.setStatus(KbDocument.READY);
         docRepo.save(doc);
         log.info("文档入库完成: docId={} filename={} children={}", docId, doc.getFilename(), children.size());
+        // GraphRAG：异步提取实体关系（不阻塞主流程）
+        if (graphExtractionService != null) {
+            try {
+                graphExtractionService.extractFromDocument(docId, children);
+            } catch (Exception e) {
+                log.warn("GraphRAG 提取失败 docId={}: {}", docId, e.getMessage());
+            }
+        }
     }
 
     /**
@@ -538,6 +566,14 @@ public class IngestionService {
         childRepo.deleteByDocId(docId);
         parentRepo.deleteByDocId(docId);
         docRepo.deleteById(docId);
+        // GraphRAG：软删除关联实体和关系
+        if (graphExtractionService != null) {
+            try {
+                graphExtractionService.deactivateByDocId(docId);
+            } catch (Exception e) {
+                log.warn("GraphRAG 删除失败 docId={}: {}", docId, e.getMessage());
+            }
+        }
         try {
             Path dir = Path.of("data", "uploads", docId);
             if (Files.exists(dir)) {

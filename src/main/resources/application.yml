@@ -322,6 +322,16 @@ wikiagent:
   # allowlist 恒命中 / denylist 恒拒绝（优先级高于 percent）。
   gray:
     features: {}
+  # ============================================================
+  # GraphRAG 知识图谱（需求2）：LLM 实体/关系抽取 + 图感知检索
+  # enabled=false 时 GraphExtractionService/GraphRagService 不装配，
+  # 入库流水线与检索主链路零影响（ObjectProvider 空回退）。
+  # ============================================================
+  graph:
+    enabled: ${WIKIAGENT_GRAPH_ENABLED:false}   # 默认关闭；开启后入库时 LLM 抽取实体关系
+    max-neighbors: 10                            # 图检索 1-hop 邻居扩展上限
+    max-chars-per-chunk: 1500                    # 单 chunk 送入抽取模型的最大字符数
+
   cache:
     embedding:
       enabled: ${WIKIAGENT_CACHE_EMBEDDING_ENABLED:true}

@@ -294,6 +294,8 @@ class TaskApiIntegrationTest {
     @Test
     void suspendResumeRoundTrip() throws Exception {
         String taskId = submit("T10API", "user-2");
+        // 等待任务进入 WAITING_HUMAN（步骤 1 抛出 HumanRequiredException），消除 suspend 与 worker 保存的竞态
+        await(() -> "WAITING_HUMAN".equals(safeStatus(taskId)), "任务进入 WAITING_HUMAN");
 
         mvc.perform(post("/api/tasks/" + taskId + "/suspend")
                         .contentType(MediaType.APPLICATION_JSON).content("{}"))
