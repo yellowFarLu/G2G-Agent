@@ -53,7 +53,11 @@ public class MetricsController {
     public ResponseEntity<Map<String, Object>> aggregation(@RequestParam(defaultValue = "false") boolean refresh) {
         MetricsSnapshot snapshot = refresh ? aggregationJob.aggregate() : aggregationJob.latest();
         if (snapshot == null) {
-            return ResponseEntity.ok(Map.of("aggregatedAt", null, "message", "尚未聚合，调用 refresh=true 立即聚合"));
+            // Map.of 拒绝 null 值，改用 LinkedHashMap 承载空快照提示
+            Map<String, Object> empty = new LinkedHashMap<>();
+            empty.put("aggregatedAt", null);
+            empty.put("message", "尚未聚合，调用 refresh=true 立即聚合");
+            return ResponseEntity.ok(empty);
         }
         return ResponseEntity.ok(snapshot.toMap());
     }
