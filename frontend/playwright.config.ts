@@ -3,7 +3,7 @@ import { defineConfig, devices } from '@playwright/test';
 /**
  * Playwright 配置（AC-G1 全链路 e2e）。
  * 默认 mock 模式：spec 内 page.route 拦截 /api/**，无需后端即可在 CI 运行。
- * 真实后端冒烟：E2E_REAL_BACKEND=1 且本地 8080 已启动后端时，运行 e2e/real-backend.spec.ts。
+ * 真实后端冒烟：E2E_REAL_BACKEND=1 且本地 8090 已启动后端时，运行 e2e/real-backend.spec.ts。
  */
 export default defineConfig({
   testDir: './e2e',

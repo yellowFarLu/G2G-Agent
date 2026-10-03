@@ -1571,7 +1571,7 @@ management:
 ### 13.2 集成测试
 - `docker-compose up`：MySQL + Redis + Milvus 一键起
 - `mvn spring-boot:run`：启动应用，`/api/health` 返回 200 且 Redis/MySQL/Milvus 全绿
-- 端到端 SSE：`curl -N -X POST localhost:8080/api/chat -d '{"userId":"u1","sessionId":"s1","question":"你好"}'`，应见 `stage/delta/done` 事件，且 `agent_trace` 表新增记录
+- 端到端 SSE：`curl -N -X POST localhost:8090/api/chat -d '{"userId":"u1","sessionId":"s1","question":"你好"}'`，应见 `stage/delta/done` 事件，且 `agent_trace` 表新增记录
 
 ### 13.3 人工验收（逐条对应用户要求）
 1. **多轮记忆**：连续 25 轮对话，第 21 轮起触发滚动摘要，前 15 轮被压缩但关键事实不丢（交接清单 + field_index 兜底）
@@ -1612,7 +1612,7 @@ management:
 
 ### 13.6 v4 专项验收（1 万台服务器亲和性 + 反馈数据 + 看板指标 + 冲突解决 UI）
 
-17. **1 万台服务器会话亲和（应用代码层）**：起 2 个应用副本（同一镜像，端口 8080/8081），用同一 `X-User-Id: u1` 连续发 10 次 `POST /api/chat`，校验 docker-compose Nginx 日志中至少 9 次打到同一节点（一致性哈希命中）。停掉该节点，再发 5 次，校验自动切到另一节点且 `kb_feedback` 表可正常写入（Redis Session 兜底状态不丢）。
+17. **1 万台服务器会话亲和（应用代码层）**：起 2 个应用副本（同一镜像，端口 8090/8091），用同一 `X-User-Id: u1` 连续发 10 次 `POST /api/chat`，校验 docker-compose Nginx 日志中至少 9 次打到同一节点（一致性哈希命中）。停掉该节点，再发 5 次，校验自动切到另一节点且 `kb_feedback` 表可正常写入（Redis Session 兜底状态不丢）。
 18. **反馈数据落库**：前端点"有用"按钮，调 `POST /api/feedback`，校验 `kb_feedback` 表新增 1 条记录（每个 docId 一条）；同 user 同 trace 同 doc 再点"无用"按钮，校验旧 useful 记录被 DELETE + 新 useless 记录 INSERT；`metric_event` 表 dimension=`useless` 异步新增。`UNIQUE KEY uk_user_trace_doc` 幂等性验证：连续点 3 次"有用"按钮，`kb_feedback` 表对应 trace+doc 只 1 条记录。
 19. **看板 6 指标**：
     - 指标 1 召回率 + 指标 2 准确率：跑 `mvn test -Dtest=AgentEvalTest` 跑 RAGAS 离线评测，校验 `golden_rag.json` 中至少 50 条样本分数入库；分数 ≥ 0.7 视为通过
@@ -1848,8 +1848,8 @@ management:
 # nginx/conf.d/upstream.conf（开发期最小可用）
 upstream wikiagent_backend {
     hash $http_x_user_id consistent;     # 按 X-User-Id 一致性哈希
-    server wikiagent-1:8080 max_fails=3 fail_timeout=30s;
-    server wikiagent-2:8080 max_fails=3 fail_timeout=30s;
+    server wikiagent-1:8090 max_fails=3 fail_timeout=30s;
+    server wikiagent-2:8090 max_fails=3 fail_timeout=30s;
     keepalive 32;
 }
 

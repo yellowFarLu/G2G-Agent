@@ -1,7 +1,7 @@
 import { test, expect } from '@playwright/test';
 
 /**
- * 真实后端冒烟 e2e（可选）：E2E_REAL_BACKEND=1 且本地 8080 已启动 wiki-Agent 后端时运行。
+ * 真实后端冒烟 e2e（可选）：E2E_REAL_BACKEND=1 且本地 8090 已启动 wiki-Agent 后端时运行。
  * 链路：真实上传 txt → 任务出现在列表 → 详情步骤渲染。
  * 默认跳过（本地无 Docker/LLM key 时全链路产物依赖不可用，仅做冒烟级断言）。
  */

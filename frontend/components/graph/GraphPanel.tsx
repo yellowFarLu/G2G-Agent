@@ -52,7 +52,7 @@ export default function GraphPanel() {
 
   useEffect(() => {
     fetch('/api/graph/stats')
-      .then((r) => r.json())
+      .then((r) => (r.ok ? r.json() : null))
       .then(setStats)
       .catch(() => setStats(null));
   }, []);

@@ -7,7 +7,7 @@
 set -e
 cd "$(dirname "$0")"
 
-PORT=8080
+PORT=8090
 LOG_DIR="logs"
 LOG_FILE="$LOG_DIR/app.log"
 ENV_FILE=".env"

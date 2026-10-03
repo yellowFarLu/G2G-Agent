@@ -379,7 +379,7 @@ PENDING ─► DISPATCH ─► RUNNING ─┬─► COMPLETED ✅
 
 ```bash
 mvn spring-boot:run          # 无需 Redis/Milvus/MySQL/Key，约 17 秒启动
-# 打开 http://localhost:8080 （Next.js 静态导出产物，由 Spring Boot 直接托管，单入口单进程）
+# 打开 http://localhost:8090 （Next.js 静态导出产物，由 Spring Boot 直接托管，单入口单进程）
 # 配置 DASHSCOPE_API_KEY 解锁真实大模型；MILVUS_HOST 解锁向量检索
 ```
 
@@ -399,10 +399,10 @@ export WIKIAGENT_GRAPH_ENABLED=true   # 入库时自动抽取实体关系，/gra
 
 ### 前端开发
 
-日常运行时只需启动后端（8080 即托管静态产物）。开发模式才需要 3000：
+日常运行时只需启动后端（8090 即托管静态产物）。开发模式才需要 3000：
 
 ```bash
-cd frontend && npm install && npm run dev    # http://localhost:3000，代理 /api → 8080
+cd frontend && npm install && npm run dev    # http://localhost:3000，代理 /api → 8090
 ```
 
 静态产物重新构建并同步到 Spring Boot：
