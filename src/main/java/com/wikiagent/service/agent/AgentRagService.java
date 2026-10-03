@@ -239,6 +239,9 @@ public class AgentRagService {
             sse.send("stage", Map.of("stage", "retrieving", "round", round, "queries", queries));
             try {
                 retrieval.search(acc, queries);
+                // GraphRAG 图扩展与向量召回同候选池（AgentRag 手工编排 search/assemble，
+                // 不能漏挂 retrieve(List) 中的图扩展，否则 PERO 关闭路径下图谱永不生效）
+                retrieval.graphExpand(acc, queries);
             } catch (Exception e) {
                 traceRecorder.record(userId, sessionId, "agent-rag-retrieval-r" + round, "tool_call",
                         String.join(" / ", queries), null, "ERROR", e.getMessage());

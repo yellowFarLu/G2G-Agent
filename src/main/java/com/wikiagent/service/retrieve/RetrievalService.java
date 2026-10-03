@@ -213,32 +213,52 @@ public class RetrievalService {
         return result;
     }
 
+    /** 图扩展单轮最多注入的子块数：bigram 探针可能命中多个实体，设护栏防止关联 chunk 泛滥。 */
+    private static final int GRAPH_MAX_INJECTED_CHUNKS = 20;
+
     /**
      * GraphRAG 图扩展（wikiagent.graph.enabled=true 时生效）：
      * 按查询匹配实体 → 1-hop 邻居扩展 → 关联 chunk 映射回父块累积，
      * 补充向量检索未覆盖的实体关联上下文。图检索失败不影响主流程。
+     * <p>
+     * 探针策略：① 整句精确匹配（用户直接输入实体名时最准）；
+     * ② 多词自然语言按 bigram/拉丁词拆解后逐探针匹配（与本地关键词降级同口径），
+     * 否则像「WMS 什么时候升级 3.0」这类改写查询永远无法命中名为「仓储管理系统 WMS」的实体。
      */
-    private void graphExpand(Accumulator acc, List<String> queries) {
+    public void graphExpand(Accumulator acc, List<String> queries) {
         if (graphRagService == null || queries == null) {
             return;
         }
+        java.util.Set<String> injectedChunkIds = new java.util.HashSet<>();
         for (String q : queries) {
             if (q == null || q.isBlank()) {
                 continue;
             }
-            try {
-                var graphResult = graphRagService.searchWithExpansion(q);
-                if (graphResult.relatedChunkIds().isEmpty()) {
-                    continue;
+            // 整句探针优先，bigram/拉丁词探针补充，去重避免同一实体重复查询
+            LinkedHashSet<String> probes = new LinkedHashSet<>();
+            probes.add(q.trim());
+            probes.addAll(extractTerms(q));
+            for (String probe : probes) {
+                if (injectedChunkIds.size() >= GRAPH_MAX_INJECTED_CHUNKS) {
+                    return;
                 }
-                for (KbChildChunk c : childRepo.findByIdIn(graphResult.relatedChunkIds())) {
-                    if (c.isActive()) {
-                        // 图命中给一个中等置信分，避免压过向量高分，但能被 rerank 重排
-                        acc.put(c.getParentId(), c.getDocId(), c.getId(), c.getChildIndex(), 0.5);
+                try {
+                    var graphResult = graphRagService.searchWithExpansion(probe);
+                    if (graphResult == null || graphResult.relatedChunkIds().isEmpty()) {
+                        continue;
                     }
+                    for (KbChildChunk c : childRepo.findByIdIn(graphResult.relatedChunkIds())) {
+                        if (c.isActive() && injectedChunkIds.add(c.getId())) {
+                            // 图命中给一个中等置信分，避免压过向量高分，但能被 rerank 重排
+                            acc.put(c.getParentId(), c.getDocId(), c.getId(), c.getChildIndex(), 0.5);
+                            if (injectedChunkIds.size() >= GRAPH_MAX_INJECTED_CHUNKS) {
+                                break;
+                            }
+                        }
+                    }
+                } catch (Exception e) {
+                    log.warn("GraphRAG 图扩展失败（不影响检索主流程）: {}", e.getMessage());
                 }
-            } catch (Exception e) {
-                log.warn("GraphRAG 图扩展失败（不影响检索主流程）: {}", e.getMessage());
             }
         }
     }
